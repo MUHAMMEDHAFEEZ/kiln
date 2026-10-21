@@ -1,0 +1,2 @@
+# One name per line: these processes / services are not shown under Running.
+# Right-click an entry in the bar and choose "Hide" to add it here.

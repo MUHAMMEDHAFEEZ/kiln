@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# kiln: command-line companion for the Kiln desktop.
+set -uo pipefail
+
+VERSION="1.0.0"
+SHARE="${KILN_SHARE:-$HOME/.local/share/kiln}"
+CONF="${KILN_CONFIG:-$HOME/.config/kiln}"
+CACHE="${KILN_CACHE:-$HOME/.cache/kiln}"
+
+usage() {
+  cat <<EOF
+kiln $VERSION: a warm, work-focused desktop for GNOME
+
+Usage: kiln <command> [args]
+
+Desktop
+  start | stop | restart   control the desktop widgets
+  status                   is it running?
+  logs [-f]                show the widgets' log
+  search                   open the launcher (also Super+K)
+
+Look
+  theme                    list themes (the current one is marked)
+  theme <name>             switch theme
+  wallpapers               regenerate the built-in wallpapers
+
+Lists
+  todo [cmd]               your personal list (the Today tab)
+  tasks [-C dir] [cmd]     the list of the project in <dir> (default: current folder)
+      cmd: ls | add <text> | done <n> | undo <n> | rm <n> | clear | path
+
+Setup
+  config                   open ~/.config/kiln/config.json
+  doctor                   check dependencies and the installation
+  version
+EOF
+}
+
+die() { echo "kiln: $*" >&2; exit 1; }
+
+# --- todo lists: one "[ ] text" / "[x] text" item per line
+list_cmd() {   # list_cmd <file> <label> [cmd args...]
+  local f="$1" label="$2"; shift 2
+  mkdir -p "$(dirname "$f")"; touch "$f"
+  local n; n="$(wc -l < "$f")"
+  need_n() { [[ "${1:-}" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le "$n" ] || die "no item '${1:-}'"; }
+  case "${1:-ls}" in
+    add)   shift; [ $# -gt 0 ] || die "usage: add <text>"; echo "[ ] $*" >> "$f" ;;
+    done)  need_n "${2:-}"; sed -i "${2}s/^\[ \]/[x]/" "$f" ;;
+    undo)  need_n "${2:-}"; sed -i "${2}s/^\[x\]/[ ]/" "$f" ;;
+    rm)    need_n "${2:-}"; sed -i "${2}d" "$f" ;;
+    clear) sed -i '/^\[x\]/d' "$f" ;;
+    path)  echo "$f"; return ;;
+    ls|list) ;;
+    *) die "unknown list command '$1' (ls, add, done, undo, rm, clear, path)" ;;
+  esac
+  if [ -s "$f" ]; then
+    [ -n "$label" ] && echo "$label"
+    nl -ba "$f" | sed -e 's/\[ \]/○/' -e 's/\[x\]/●/'
+  else
+    echo "${label:+$label }nothing to do"
+  fi
+}
+
+project_file() {   # the list file for the git project containing <dir>
+  local top name
+  top="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null || (cd "$1" && pwd))"
+  name="$(basename "$top" | sed 's/[^A-Za-z0-9._-]/_/g')"
+  echo "$CONF/project-todos/$name.txt"
+}
+
+doctor() {
+  local ok=0
+  check() { if eval "$2" >/dev/null 2>&1; then printf '  ✓ %s\n' "$1"; else printf '  ✗ %s  (%s)\n' "$1" "$3"; ok=1; fi; }
+  echo "Required"
+  check "GNOME Shell 46"            "gnome-shell --version | grep -q ' 46'"   "other versions are untested"
+  check "Python GTK 3 bindings"     "/usr/bin/python3 -c 'import gi; gi.require_version(\"Gtk\",\"3.0\")'" "sudo apt install python3-gi gir1.2-gtk-3.0"
+  check "VTE terminal widget"       "/usr/bin/python3 -c 'import gi; gi.require_version(\"Vte\",\"2.91\")'" "sudo apt install gir1.2-vte-2.91"
+  check "pycairo"                   "/usr/bin/python3 -c 'import cairo'"     "sudo apt install python3-gi-cairo"
+  check "xdotool"                   "command -v xdotool"                     "sudo apt install xdotool"
+  echo "Optional"
+  check "playerctl (Now Playing)"   "command -v playerctl"                   "sudo apt install playerctl"
+  check "Pillow (wallpapers)"       "/usr/bin/python3 -c 'import PIL'"       "sudo apt install python3-pil"
+  check "GitHub CLI (GitHub card)"  "command -v gh && gh auth status"        "install gh, then: gh auth login"
+  check "lark-cli (Lark card)"      "command -v lark-cli"                    "only needed for the Lark integration"
+  echo "Installation"
+  check "Kiln files"                "test -f '$SHARE/app.py'"                "run ./install.sh"
+  check "Shell extension enabled"   "gnome-extensions info kiln-shell@local | grep -q 'State: ACTIVE'" "log out and back in once"
+  check "Widgets running"           "systemctl --user is-active --quiet kiln" "kiln start"
+  check "Desktop Icons NG is off"   "! gnome-extensions info ding@rastersoft.com 2>/dev/null | grep -q 'State: ACTIVE'" "it covers the widgets; kiln draws the icons itself"
+  return $ok
+}
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  start|restart) "$SHARE/start.sh" && echo "kiln: started" ;;
+  stop)    systemctl --user stop kiln 2>/dev/null; echo "kiln: stopped" ;;
+  status)  systemctl --user --no-pager status kiln | head -5 ;;
+  logs)    journalctl --user -u kiln --no-pager -n 80 "$@" ;;
+  search)  "$SHARE/search.sh" ;;
+  theme)   /usr/bin/python3 "$SHARE/theme.py" "$@" ;;
+  wallpapers) /usr/bin/python3 "$SHARE/theme.py" --wallpapers ;;
+  todo)    list_cmd "$CONF/todo.txt" "" "$@" ;;
+  tasks)
+    dir="$PWD"
+    if [ "${1:-}" = "-C" ]; then dir="${2:?kiln tasks -C <dir>}"; shift 2; fi
+    [ -d "$dir" ] || die "no such folder: $dir"
+    f="$(project_file "$dir")"
+    list_cmd "$f" "$(basename "$f" .txt):" "$@" ;;
+  config)  [ -f "$CONF/config.json" ] || die "no config yet, run ./install.sh"; xdg-open "$CONF/config.json" >/dev/null 2>&1 & ;;
+  doctor)  doctor ;;
+  version|-v|--version) echo "kiln $VERSION" ;;
+  help|-h|--help) usage ;;
+  *) usage; exit 1 ;;
+esac

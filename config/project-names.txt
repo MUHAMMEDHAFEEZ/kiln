@@ -1,0 +1,4 @@
+# Labels for the Projects card, one per line:
+#   repo-folder-name | subtitle | #color
+# Subtitle and colour are optional; without a subtitle the card shows the git branch.
+# my-api | Backend for the shop | #5b8cff

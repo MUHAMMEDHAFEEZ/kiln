@@ -1,0 +1,14 @@
+{
+  "uuid": "kiln-shell@local",
+  "name": "Kiln Shell",
+  "description": "Part of the Kiln desktop: re-skins the top bar (workspace badge, desktop name, search pill, date on the right) and the lock screen (crisp wallpaper, status chips, now playing, focus timer, prayer times).",
+  "shell-version": [
+    "46"
+  ],
+  "url": "https://github.com/MUHAMMEDHAFEEZ/kiln",
+  "version": 1,
+  "session-modes": [
+    "user",
+    "unlock-dialog"
+  ]
+}

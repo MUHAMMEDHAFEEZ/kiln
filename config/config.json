@@ -1,0 +1,18 @@
+{
+  "desktop_name": "{Host}'s Desktop",
+  "clock": "12h",
+
+  "desktop_dir": "",
+  "project_dirs": ["~/Desktop", "~/Projects", "~/code"],
+  "project_exclude": [],
+
+  "web_search": { "name": "DuckDuckGo", "url": "https://duckduckgo.com/?q={q}" },
+
+  "location": { "city": "", "latitude": null, "longitude": null },
+  "prayer": { "enabled": false, "method": "mwl", "asr": "standard", "language": "en" },
+
+  "lock_screen": { "widgets": true, "brightness": 0.72, "blur": 0 },
+
+  "integrations": { "github": true, "lark": false, "claude_code": true },
+  "theme_apply": { "gtk": true, "dock": true, "gnome_terminal": true, "wallpaper": true }
+}

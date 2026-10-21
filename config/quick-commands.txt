@@ -1,0 +1,6 @@
+# One command per line: shown as buttons under the desktop terminal.
+git status
+git pull
+npm run dev
+docker ps
+code .

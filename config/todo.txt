@@ -1,0 +1,3 @@
+[ ] Try Super+K to search apps, files and projects
+[ ] Switch themes with: kiln theme
+[ ] Edit ~/.config/kiln/config.json to set your city and projects
