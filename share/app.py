@@ -3172,10 +3172,28 @@ YTM_ONLY = bool((CFG.get("now_playing") or {}).get("youtube_music_only"))
 YTM_APPS = ("youtube-music", "youtubemusic", "youtube_music", "pear", "ytmdesktop")
 
 
+_ytm_pids = {}
+
+
+def _ytm_process(name):
+    """Electron apps register as `chromium.instance<pid>`: look at the program behind the pid."""
+    m = re.search(r"instance(\d+)$", name)
+    if not m:
+        return False
+    pid = m.group(1)
+    if pid not in _ytm_pids:
+        try:
+            exe = os.readlink(f"/proc/{pid}/exe").lower()
+        except OSError:
+            exe = ""
+        _ytm_pids[pid] = "youtube-music" in exe or "youtube music" in exe or "pear" in exe
+    return _ytm_pids[pid]
+
+
 def is_ytm(name, url):
     """YouTube Music: its desktop app, or a browser tab on music.youtube.com."""
     name = name.lower()
-    return any(a in name for a in YTM_APPS) or "music.youtube" in url.lower()
+    return any(a in name for a in YTM_APPS) or "music.youtube" in url.lower() or _ytm_process(name)
 
 
 def open_ytm():
@@ -3514,7 +3532,7 @@ class NowPlaying(Gtk.DrawingArea):
 
         # footer
         if i:
-            text(cr, f"{i['status'].lower()} · {i['inst'].split('.')[0]}", cx, 318, 11.5, C["dim"], align="c")
+            text(cr, f"{i['status'].lower()} · {i['src']}", cx, 318, 11.5, C["dim"], align="c")
         else:
             label = "Open YouTube Music"
             lay3 = PangoCairo.create_layout(cr)

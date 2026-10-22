@@ -469,7 +469,7 @@ export default class KilnShell extends Extension {
         for (const p of players?.values() ?? []) {
             if (!p._visible)
                 continue;
-            if ((this._cfg.now_playing ?? {}).youtube_music_only && !ytm.test((p._busName ?? '').toLowerCase()))
+            if ((this._cfg.now_playing ?? {}).youtube_music_only && !ytm.test(`${p._busName ?? ''} ${p._mprisProxy?.Identity ?? ''}`.toLowerCase()))
                 continue;                       // only the YouTube Music app
             if (p.status === 'Playing')
                 return p;
