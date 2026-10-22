@@ -11,6 +11,7 @@
   "location": { "city": "", "latitude": null, "longitude": null },
   "prayer": { "enabled": false, "method": "mwl", "asr": "standard", "language": "en" },
 
+  "now_playing": { "youtube_music_only": false },
   "lock_screen": { "widgets": true, "brightness": 0.72, "blur": 0 },
 
   "integrations": { "github": true, "lark": false, "claude_code": true },

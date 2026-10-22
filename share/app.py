@@ -49,6 +49,7 @@ DEFAULT_CONFIG = {
     "project_dirs": ["~/Desktop"],
     "web_search": {"name": "DuckDuckGo", "url": "https://duckduckgo.com/?q={q}"},
     "integrations": {"github": True, "lark": False, "claude_code": True},
+    "now_playing": {"youtube_music_only": False},
 }
 
 
@@ -3166,6 +3167,24 @@ class Launcher:
 # ----------------------------------------------------------------- now playing (any MPRIS player, e.g. YouTube Music in Brave)
 ART_DIR = f"{CACHE}/art"
 YTM_URL = "https://music.youtube.com"
+# MPRIS names of YouTube Music desktop apps (Pear Desktop / th-ch "youtube-music", ytmdesktop)
+YTM_ONLY = bool((CFG.get("now_playing") or {}).get("youtube_music_only"))
+YTM_APPS = ("youtube-music", "youtubemusic", "youtube_music", "pear", "ytmdesktop")
+
+
+def is_ytm(name, url):
+    """YouTube Music: its desktop app, or a browser tab on music.youtube.com."""
+    name = name.lower()
+    return any(a in name for a in YTM_APPS) or "music.youtube" in url.lower()
+
+
+def open_ytm():
+    """The YouTube Music desktop app if it is installed, else the website."""
+    for exe in ("youtube-music", "pear-desktop", "ytmdesktop"):
+        if shutil.which(exe):
+            run([exe])
+            return
+    open_url(YTM_URL)
 
 
 def fmt_time(s):
@@ -3228,12 +3247,10 @@ class NowPlaying(Gtk.DrawingArea):
             p = line.split("\t")
             if len(p) < 10 or not p[3].strip():
                 continue
-            src = p[1]
-            blob = " ".join(p[5:10]).lower()
-            if "music.youtube" in blob or "ytimg" in blob or "googleusercontent" in blob:
-                src = "YouTube Music"
-            elif src in ("brave", "chromium", "chrome", "firefox"):
-                src = src.capitalize()
+            ytm = is_ytm(p[0], p[9])
+            if YTM_ONLY and not ytm:
+                continue                      # VLC, YouTube videos, other players: not shown
+            src = "YouTube Music" if ytm else p[1].split(".")[0].capitalize()
             try:
                 length = int(p[7] or 0) / 1e6
                 pos = int(p[8] or 0) / 1e6
@@ -3351,7 +3368,7 @@ class NowPlaying(Gtk.DrawingArea):
         if key is None or ev.button != 1:
             return False
         if key == "open":
-            open_url(YTM_URL)
+            open_ytm()
         elif not self.info:
             return True
         elif key in ("play", "art"):

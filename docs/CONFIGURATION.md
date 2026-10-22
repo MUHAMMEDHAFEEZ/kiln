@@ -21,6 +21,7 @@ All settings live in **`~/.config/kiln/config.json`**. Open it with `kiln config
   "location": { "city": "", "latitude": null, "longitude": null },
   "prayer": { "enabled": false, "method": "mwl", "asr": "standard", "language": "en" },
 
+  "now_playing": { "youtube_music_only": false },
   "lock_screen": { "widgets": true, "brightness": 0.72, "blur": 0 },
 
   "integrations": { "github": true, "lark": false, "claude_code": true },
@@ -54,6 +55,12 @@ They are calculated on your machine and follow your system's time zone and dayli
 | `method` | `egypt`, `mwl` (Muslim World League), `isna`, `karachi`, `makkah` (Umm al-Qura), `gulf`, `kuwait`, `qatar`, `singapore`, `turkey`, `france`, `russia` |
 | `asr` | `standard` (Shafi'i, Maliki, Hanbali) or `hanafi` |
 | `language` | `ar` (الفجر …) or `en` (Fajr …) |
+
+## Now Playing
+
+| Key | Default | Meaning |
+|---|---|---|
+| `now_playing.youtube_music_only` | `false` | Show only YouTube Music: the [Pear Desktop](https://github.com/pear-devs/pear-desktop) app (`youtube-music`), or a browser tab on music.youtube.com. VLC, YouTube videos and other players are ignored. The card's *Open YouTube Music* button starts the desktop app when it is installed. |
 
 ## Lock screen
 
