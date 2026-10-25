@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.1 (2026-10-25)
 
 * Updates are signed: Kiln installs a release only when it carries the maintainer's signature (checked with
   `ssh-keygen`), so a stolen GitHub account cannot push an update. `tools/release.sh` builds, signs and publishes

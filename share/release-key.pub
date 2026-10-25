@@ -1,0 +1,2 @@
+# Kiln release keys: updates are installed only when signed by one of these (docs/RELEASING.md)
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPz7d9sY61ydXVlRbwTQmCYWLo+uPQCaIa3nfg3FZIqL kiln-release
