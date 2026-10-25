@@ -4410,10 +4410,10 @@ def compute_layout(g, wa):
     W, H = g.width, g.height
     bar_y = H - bottom - WorkBar.H
     row2_top = top + CARDS_H + gap
-    term_h = max(TerminalCard.H, min(720, bar_y - gap - row2_top))
-    term_y = bar_y - gap - term_h
+    term_h = max(TerminalCard.H, min(620, bar_y - gap - row2_top))
+    term_y = row2_top                               # directly under the cards, like on a small screen
     side_w = FocusCard.W + gap + NowPlaying.W
-    term_w = max(TerminalCard.W, min(2200, W - left - right - side_w - gap))
+    term_w = max(TerminalCard.W, min(1500, W - left - right - side_w - gap))   # wider is not better
     music_x = W - right - NowPlaying.W
     focus_x = music_x - gap - FocusCard.W
     side_y = bar_y - gap - FocusCard.H              # focus + music sit on the work bar
