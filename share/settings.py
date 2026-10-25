@@ -45,6 +45,7 @@ DEFAULTS = {
     "dock": {"cards": ["git", "system", "day", "notes", "tests"], "position": "left"},
     "week_start": "sun",
     "performance": "auto",
+    "updates": {"mode": "notify"},
     "integrations": {"github": True, "lark": False, "claude_code": True},
     "theme_apply": {"gtk": True, "dock": True, "gnome_terminal": True, "wallpaper": True},
 }
@@ -480,6 +481,7 @@ class Settings(Gtk.Window):
         dk.connect("changed", lambda c: self.set_dock_position(c.get_active_id()))
         box.pack_start(self.row("Ubuntu Dock position", dk,
                                 "Kiln keeps the dock there, even if something moves it."), False, False, 0)
+        self.build_updates(box)
         pf = Gtk.ComboBoxText()
         for k, n in (("auto", "Automatic"), ("low", "Light (older or slower computers)"), ("normal", "Full")):
             pf.append(k, n)
@@ -512,6 +514,53 @@ class Settings(Gtk.Window):
                                    "A small dot marks folders and files changed in the last two days."),
                        False, False, 0)
         return box
+
+    def build_updates(self, box):
+        import update as UP
+        mode = Gtk.ComboBoxText()
+        for k, n in (("auto", "Install them for me"), ("notify", "Tell me, then I press Update"), ("off", "Never check")):
+            mode.append(k, n)
+        mode.set_active_id(self.cfg.get("updates", {}).get("mode", "notify"))
+        mode.connect("changed", lambda c: self.set("updates.mode", c.get_active_id()))
+        box.pack_start(self.row("Kiln updates", mode, "New releases come from GitHub. Your settings are kept, and "
+                                "the previous version is kept in case the new one does not start."), False, False, 0)
+        row = Gtk.Box(spacing=10)
+        self.upd_msg = label("", "kiln-sub", wrap=True)
+        self.upd_btn = Gtk.Button(label="Check now")
+        self.upd_btn.connect("clicked", lambda *_: self.update_clicked(UP))
+        row.pack_start(self.upd_btn, False, False, 0)
+        row.pack_start(self.upd_msg, True, True, 0)
+        box.pack_start(row, False, False, 4)
+        self.update_label(UP)
+
+    def update_label(self, UP):
+        st = UP.load_state()
+        if st.get("newer"):
+            self.upd_msg.set_text(f"Kiln {st['latest']} is available (you have {UP.installed()}).")
+            self.upd_btn.set_label("Update now")
+        else:
+            self.upd_msg.set_text(f"You have Kiln {UP.installed()}." + (f" Last update: {st['last_result']}."
+                                                                         if st.get("last_result") else ""))
+            self.upd_btn.set_label("Check now")
+
+    def update_clicked(self, UP):
+        self.upd_btn.set_sensitive(False)
+        self.upd_msg.set_text("Working…")
+        install = UP.load_state().get("newer")
+
+        def work():
+            try:
+                if install:
+                    msg = UP.apply(UP.load_state()["latest"])
+                else:
+                    st = UP.check()
+                    msg = st.get("error") or ("Kiln " + st["latest"] + " is available." if st.get("newer")
+                                              else "Kiln is up to date.")
+            except UP.UpdateError as e:
+                msg = str(e)
+            GLib.idle_add(lambda: (self.upd_btn.set_sensitive(True), self.update_label(UP), self.upd_msg.set_text(msg),
+                                   False)[-1])
+        threading.Thread(target=work, daemon=True).start()
 
     def set_dock_position(self, pos):
         pos = "" if pos == "none" else pos

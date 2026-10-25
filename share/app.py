@@ -66,6 +66,7 @@ DEFAULT_CONFIG = {
     "dock": {"cards": ["git", "system", "day", "notes", "tests"], "position": "left"},
     "week_start": "sun",
     "performance": "auto",
+    "updates": {"mode": "notify"},
 }
 
 
@@ -364,6 +365,24 @@ def run(cmd):
 
 
 _dock_watch = []
+
+
+def schedule_update_checks():
+    """Look for a newer release a couple of minutes after start and then every few hours. The check runs as
+    its own systemd unit, because installing an update restarts Kiln (and would stop a child of Kiln)."""
+    if DEMO or str((CFG.get("updates") or {}).get("mode", "notify")).lower() == "off":
+        return
+
+    def go():
+        cmd = ["/usr/bin/python3", f"{SHARE}/update.py", "auto"]
+        if shutil.which("systemd-run"):
+            env = [f"-E{k}={os.environ[k]}" for k in ("DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS",
+                                                       "XDG_RUNTIME_DIR") if os.environ.get(k)]
+            cmd = ["systemd-run", "--user", "--collect", "--quiet", "--unit=kiln-update", *env, *cmd]
+        run(cmd)
+        return True
+    GLib.timeout_add_seconds(150, lambda: (go(), False)[1])
+    GLib.timeout_add_seconds(6 * 3600, go)
 
 
 def enforce_dock_position():
@@ -6342,6 +6361,7 @@ def main():
         return True
 
     enforce_dock_position()
+    schedule_update_checks()
     cards.metrics.sample()
     GLib.timeout_add_seconds(every(2), tick)
     GLib.timeout_add_seconds(every(60), lambda: (icons.queue_draw(), True)[1])      # keeps the "recent" dots fresh

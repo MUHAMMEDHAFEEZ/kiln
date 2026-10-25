@@ -18,6 +18,7 @@
   "icons": { "recent_dot": true, "recent_hours": 48 },
   "dock": { "cards": ["git", "system", "day", "notes", "tests"], "position": "left" },
   "performance": "auto",
+  "updates": { "mode": "notify" },
   "week_start": "sun",
 
   "integrations": { "github": true, "lark": false, "claude_code": true },

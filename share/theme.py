@@ -467,7 +467,8 @@ def write_gtk_accent(c, home=HOME):
     for d in ("gtk-3.0", "gtk-4.0"):
         path = f"{home}/.config/{d}/gtk.css"
         try:
-            old = open(path, encoding="utf-8").read()
+            with open(path, encoding="utf-8") as f:
+                old = f.read()
         except OSError:
             old = ""
         new = GTK_BLOCK.sub("", old).rstrip("\n")
@@ -626,6 +627,12 @@ def main():
     if len(sys.argv) < 2 or sys.argv[1] in ("list", "-l", "--list"):
         for n in data["order"]:
             print(("* " if n == cur else "  ") + f"{n:15s} {data['themes'][n].get('label', '')}")
+        return
+    if sys.argv[1] == "--refresh":               # after an update: new icon files, accent block, dock position
+        t = data["themes"].get(cur) or data["themes"]["kiln-dark"]
+        write_app_icon(t)
+        write_gtk_accent(t["colors"])
+        enforce_dock_position()
         return
     if sys.argv[1] == "--wallpapers":            # (re)generate all placeholder wallpapers
         for n in data["order"]:

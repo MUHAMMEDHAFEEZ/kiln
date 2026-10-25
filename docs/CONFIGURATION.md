@@ -30,6 +30,7 @@ All settings live in **`~/.config/kiln/config.json`**. Open it with `kiln config
   "dock": { "cards": ["git", "system", "day", "notes", "tests"] },
   "week_start": "sun",
   "performance": "auto",
+  "updates": { "mode": "notify" },
 
   "integrations": { "github": true, "lark": false, "claude_code": true },
   "theme_apply": { "gtk": true, "dock": true, "gnome_terminal": true, "wallpaper": true }
@@ -85,6 +86,7 @@ They are calculated on your machine and follow your system's time zone and dayli
 | `dock.cards` | `git`, `system`, `day`, `notes`, `tests` | Which cards may use the free space beside the terminal, in the order they are placed: `git`, `system`, `day`, `notes`, `tests`, `services`. `services` (dev servers and containers) is off by default because the work bar already shows them. Cards that do not fit are left out, so a laptop screen shows none. |
 | `dock.position` | `"left"` | Where Kiln keeps the Ubuntu Dock: `"left"`, `"right"`, `"bottom"` or `""` to leave it alone. Kiln puts it back at once if something moves it. |
 | `performance` | `"auto"` | `"low"` makes Kiln lighter on older computers: background refreshes run about 2.5 times less often and the busiest-programs sample is taken less often. `"auto"` picks it on a computer with two cores or less, or under 4 GB of memory. `"normal"` never does. |
+| `updates.mode` | `"notify"` | `"notify"`: a notification when a new release is out, you press Update. `"auto"`: install it by itself (not while you are in Focus mode). `"off"`: never check. Run `kiln update` any time, `kiln update --rollback` to go back one version. Updates come from the project's GitHub releases and are installed the same way as `./install.sh`. |
 | `week_start` | `"sun"` | First day of the week in the calendar: `"sun"`, `"sat"` or `"mon"`. |
 
 The **Today** card shows prayer times only when `prayer.enabled` is on and a location is set (see

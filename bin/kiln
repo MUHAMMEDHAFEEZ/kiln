@@ -2,8 +2,8 @@
 # kiln: command-line companion for the Kiln desktop.
 set -uo pipefail
 
-VERSION="1.1.0"
 SHARE="${KILN_SHARE:-$HOME/.local/share/kiln}"
+VERSION="$(cat "$SHARE/VERSION" 2>/dev/null || echo unknown)"
 CONF="${KILN_CONFIG:-$HOME/.config/kiln}"
 CACHE="${KILN_CACHE:-$HOME/.cache/kiln}"
 
@@ -36,6 +36,7 @@ Setup
   connect <service>        connect Todoist, Trello, Linear, Asana, Jira, Notion, ClickUp, Slack, a calendar ...
   disconnect <service>     remove its saved details
   sync                     refresh the tasks and meetings now
+  update [--check|--yes]   look for a newer release and install it (--rollback goes back one version)
   settings [page]          open the Kiln Settings window (page: accounts, themes, general ...)
   config                   open ~/.config/kiln/config.json
   doctor                   check dependencies and the installation
@@ -123,10 +124,18 @@ case "$cmd" in
   connect|disconnect) [ -n "${1:-}" ] || die "usage: kiln $cmd <service>  (see: kiln accounts)"
     /usr/bin/python3 "$SHARE/accounts.py" "$cmd" "$@" ;;
   sync) /usr/bin/python3 "$SHARE/accounts.py" sync ;;
+  update)
+    case "${1:-}" in
+      --check) /usr/bin/python3 "$SHARE/update.py" check ;;
+      --rollback) /usr/bin/python3 "$SHARE/update.py" rollback ;;
+      --yes|-y) /usr/bin/python3 "$SHARE/update.py" apply --yes ;;
+      "") /usr/bin/python3 "$SHARE/update.py" apply ;;
+      *) die "usage: kiln update [--check | --yes | --rollback]" ;;
+    esac ;;
   settings) setsid /usr/bin/python3 "$SHARE/settings.py" "$@" >/dev/null 2>&1 & ;;
   config)  [ -f "$CONF/config.json" ] || die "no config yet, run ./install.sh"; xdg-open "$CONF/config.json" >/dev/null 2>&1 & ;;
   doctor)  doctor ;;
-  version|-v|--version) echo "kiln $VERSION" ;;
+  version|-v|--version) echo "kiln $VERSION"; /usr/bin/python3 "$SHARE/update.py" status 2>/dev/null | grep -E "^(newest|last check)" || true ;;
   help|-h|--help) usage ;;
   *) usage; exit 1 ;;
 esac

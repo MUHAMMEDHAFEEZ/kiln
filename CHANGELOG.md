@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.2.0 (2026-10-25)
 
+* **Updates**: Kiln checks GitHub for new releases and can install them for you (`updates.mode`: notify, auto or
+  off; Settings → General; `kiln update`). The old version is kept and put back if the new one does not start.
 * The Kiln app icon and the accent colour of GTK apps (GNOME Settings, Files, Kiln Settings) follow the theme.
 * The Ubuntu Dock is kept on the left (`dock.position`; Settings → General).
 * Clicking the clock card opens a prayer-times popup instead of the system monitor.
