@@ -30,6 +30,7 @@ Lists
       cmd: ls | add <text> | done <n> | undo <n> | rm <n> | clear | path
 
 Setup
+  settings                 open the Kiln Settings window
   config                   open ~/.config/kiln/config.json
   doctor                   check dependencies and the installation
   version
@@ -107,6 +108,7 @@ case "$cmd" in
     [ -d "$dir" ] || die "no such folder: $dir"
     f="$(project_file "$dir")"
     list_cmd "$f" "$(basename "$f" .txt):" "$@" ;;
+  settings) setsid /usr/bin/python3 "$SHARE/settings.py" "$@" >/dev/null 2>&1 & ;;
   config)  [ -f "$CONF/config.json" ] || die "no config yet, run ./install.sh"; xdg-open "$CONF/config.json" >/dev/null 2>&1 & ;;
   doctor)  doctor ;;
   version|-v|--version) echo "kiln $VERSION" ;;

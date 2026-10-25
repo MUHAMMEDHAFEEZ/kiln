@@ -18,7 +18,8 @@ say() { printf '\033[38;2;217;119;87m==>\033[0m %s\n' "$*"; }
 
 say "Stopping the widgets"
 systemctl --user stop kiln 2>/dev/null
-rm -f "$HOME/.config/autostart/kiln.desktop"
+rm -f "$HOME/.config/autostart/kiln.desktop" "$HOME/.local/share/applications/kiln-settings.desktop" \
+      "$HOME/.local/share/icons/hicolor/scalable/apps/kiln.svg"
 
 say "Removing the shell extension and the Super+K shortcut"
 gnome-extensions disable "$UUID" 2>/dev/null
@@ -50,7 +51,7 @@ fi
 
 if [ -f "$HOME/.claude/settings.json" ] && grep -q "kiln/claude-hook.sh" "$HOME/.claude/settings.json"; then
   say "Removing the Claude Code hook"
-  /usr/bin/python3 "$(cd "$(dirname "$0")" && pwd)/tools/claude-hook.py" remove
+  /usr/bin/python3 "$SHARE/claude-hook.py" remove
 fi
 
 say "Removing Kiln's files"

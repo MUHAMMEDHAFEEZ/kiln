@@ -40,7 +40,10 @@ def strip(data):
     groups = data.get("hooks", {}).get("SessionStart", [])
     kept = []
     for g in groups:
-        g["hooks"] = [h for h in g.get("hooks", []) if MARK not in h.get("command", "") or "kiln" not in h.get("command", "")]
+        # ours: kiln's script, or the script of the "Violet Desktop" setup Kiln grew out of
+        g["hooks"] = [h for h in g.get("hooks", [])
+                      if MARK not in h.get("command", "")
+                      or not any(k in h.get("command", "") for k in ("kiln", "violet-desktop"))]
         if g["hooks"]:
             kept.append(g)
     if "hooks" in data:

@@ -14,3 +14,7 @@ First public release.
 * Top bar and lock screen extension (status chips, now playing, focus, prayer times, progress).
 * Eight themes with generated paper-cut wallpapers; user themes and wallpapers.
 * `kiln` command, `config.json` settings, installer with restore point, uninstaller.
+* Kiln Settings: a graphical setup program (themes gallery, general, projects, integrations,
+  lock screen and prayer, health check) that opens after the first install.
+* Responsive layout: follows the primary monitor's size and re-arranges when screens change.
+* Optional YouTube-Music-only Now Playing (card and lock screen).

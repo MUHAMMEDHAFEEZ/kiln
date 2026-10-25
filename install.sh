@@ -6,6 +6,7 @@
 #   ./install.sh --keep-ding     leave "Desktop Icons NG" enabled (it hides Kiln's widgets)
 #   ./install.sh --claude-hook   let Claude Code sessions see each project's Kiln todos
 #   ./install.sh --no-apply      copy files only, do not change the look yet
+#   ./install.sh --no-gui        do not open the Kiln Settings window at the end
 #
 # Nothing outside your home folder is touched (except packages with --install-deps).
 # Your previous GNOME settings are saved once to ~/.config/kiln/.restore so that
@@ -21,13 +22,14 @@ UUID="kiln-shell@local"
 EXT="$HOME/.local/share/gnome-shell/extensions/$UUID"
 KEYPATH="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/kiln-search/"
 
-INSTALL_DEPS=0 KEEP_DING=0 CLAUDE_HOOK=0 APPLY=1
+INSTALL_DEPS=0 KEEP_DING=0 CLAUDE_HOOK=0 APPLY=1 GUI=1
 for a in "$@"; do
   case "$a" in
     --install-deps) INSTALL_DEPS=1 ;;
     --keep-ding) KEEP_DING=1 ;;
     --claude-hook) CLAUDE_HOOK=1 ;;
     --no-apply) APPLY=0 ;;
+    --no-gui) GUI=0 ;;
     -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $a (see --help)"; exit 1 ;;
   esac
@@ -107,6 +109,23 @@ if [ -d "$OLD" ] && [ ! -e "$CONF/.migrated" ]; then
   touch "$CONF/.migrated"
 fi
 
+# ------------------------------------------------------------------ app menu entry + icon
+mkdir -p "$HOME/.local/share/applications" "$HOME/.local/share/icons/hicolor/scalable/apps"
+install -m 644 "$SHARE/desktop/kiln.svg" "$HOME/.local/share/icons/hicolor/scalable/apps/kiln.svg"
+cat > "$HOME/.local/share/applications/kiln-settings.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Kiln Settings
+Comment=Themes and settings for the Kiln desktop
+Exec=/usr/bin/python3 $SHARE/settings.py
+Icon=kiln
+Categories=Settings;GTK;
+Keywords=kiln;theme;desktop;widgets;
+StartupNotify=true
+DESKTOP
+gtk-update-icon-cache -q -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+update-desktop-database -q "$HOME/.local/share/applications" 2>/dev/null || true
+
 # ------------------------------------------------------------------ session integration
 say "Adding Kiln to your session"
 mkdir -p "$HOME/.config/autostart"
@@ -150,7 +169,7 @@ gnome-extensions enable "$UUID" 2>/dev/null || true
 
 if [ $CLAUDE_HOOK = 1 ]; then
   say "Adding the Claude Code SessionStart hook"
-  /usr/bin/python3 "$R/tools/claude-hook.py" add "$SHARE/claude-hook.sh"
+  /usr/bin/python3 "$SHARE/claude-hook.py" add "$SHARE/claude-hook.sh"
 fi
 
 # ------------------------------------------------------------------ look
@@ -160,11 +179,17 @@ if [ $APPLY = 1 ]; then
   /usr/bin/python3 "$SHARE/theme.py" "$theme"
 fi
 
+if [ $GUI = 1 ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && [ ! -e "$CONF/.welcomed" ]; then
+  touch "$CONF/.welcomed"
+  (setsid /usr/bin/python3 "$SHARE/settings.py" --welcome >/dev/null 2>&1 &)
+fi
+
 case ":$PATH:" in *":$BIN:"*) ;; *) warn "$BIN is not in your PATH; add it to use the 'kiln' command." ;; esac
 cat <<EOF
 
   Kiln is installed.
   • Log out and back in once so GNOME loads the new top bar and lock screen.
+  • Open "Kiln Settings" from the app menu (or run 'kiln settings') to pick a theme and set it up.
   • Super+K opens the launcher.  'kiln theme' lists the themes.  'kiln doctor' checks everything.
   • Settings: $CONF/config.json   (docs/CONFIGURATION.md explains each one)
   • Remove it any time with ./uninstall.sh

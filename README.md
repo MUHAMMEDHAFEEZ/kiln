@@ -69,6 +69,22 @@ To update, `git pull` and run `./install.sh` again. Your lists and settings are 
 
 </details>
 
+## Kiln Settings
+
+Open **Kiln Settings** from the app menu (or run `kiln settings`). It opens by itself after the
+first install.
+
+* **Appearance**: a gallery of the themes with wallpaper previews. Apply one, use your own wallpaper
+  for it, and choose what a theme may change outside Kiln.
+* **General**: desktop name, 12/24-hour clock, web search engine.
+* **Projects & files**: folders searched for projects, folders to skip, the folder shown as desktop icons.
+* **Integrations**: GitHub, Lark, Claude Code (and its todo hook), YouTube-Music-only Now Playing.
+* **Lock screen & prayer**: widgets on or off, wallpaper brightness and blur, prayer times by city,
+  calculation method and language.
+* **Health check**: the same check as `kiln doctor`, plus the log.
+
+Changes are saved the moment you make them. Press **Restart Kiln** to load them into the widgets.
+
 ## Using Kiln
 
 | | |
@@ -85,12 +101,13 @@ kiln start | stop | restart | status | logs
 kiln theme                 list themes          kiln theme sepia    switch theme
 kiln todo add "Ship it"    personal list        kiln todo done 2
 kiln tasks add "Fix login" list of the project in the current folder (-C <dir> for another)
-kiln config                open the settings    kiln doctor         check the installation
+kiln settings              open the Kiln Settings window
+kiln config                open config.json     kiln doctor         check the installation
 ```
 
 ## Make it yours
 
-* **Settings**: `~/.config/kiln/config.json`. This sets the desktop name, the 12h/24h clock, which folders hold your projects, the web search engine, your city for prayer times, the lock-screen look, the integrations and which parts of the system a theme may change. See **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**.
+* **Settings**: the Kiln Settings window, or by hand in `~/.config/kiln/config.json`. This sets the desktop name, the 12h/24h clock, which folders hold your projects, the web search engine, your city for prayer times, the lock-screen look, the integrations and which parts of the system a theme may change. See **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**.
 * **Themes**: copy one into `~/.config/kiln/themes.json` and change its colours, or write a new one. See **[docs/THEMES.md](docs/THEMES.md)**.
 * **Wallpaper**: drop `~/.config/kiln/wallpapers/<theme>.jpg` (or `.png`) and run `kiln theme <theme>`.
 * **Folders**: right-click a folder, then *Color* or *Icon*.
