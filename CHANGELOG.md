@@ -7,6 +7,8 @@
 * Work bar: a tests button (run, result, output), and Overview / Coding / Focus modes with
   `Super+J`, `kiln mode` and `kiln test`.
 * Desktop icons: a dot for recently changed items and "Group icons by type".
+* Dock cards for big screens: Git, System, Running, Today (calendar, Hijri date, prayer times) and Notes,
+  placed in the free space beside the terminal.
 
 ## 1.0.0 (2026-10-21)
 

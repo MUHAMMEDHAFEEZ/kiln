@@ -27,6 +27,8 @@ All settings live in **`~/.config/kiln/config.json`**. Open it with `kiln config
   "terminal": { "project_commands": true },
   "modes": { "focus_mutes_notifications": true },
   "icons": { "recent_dot": true, "recent_hours": 48 },
+  "dock": { "cards": ["git", "system", "services", "day", "notes"] },
+  "week_start": "sun",
 
   "integrations": { "github": true, "lark": false, "claude_code": true },
   "theme_apply": { "gtk": true, "dock": true, "gnome_terminal": true, "wallpaper": true }
@@ -74,6 +76,17 @@ They are calculated on your machine and follow your system's time zone and dayli
 | `modes.focus_mutes_notifications` | `true` | Focus mode turns notification banners off and puts your previous setting back when you leave it (also after a crash or a restart). |
 | `icons.recent_dot` | `true` | A dot on desktop items changed within `recent_hours`. A folder also counts when a project inside it has a recent commit. |
 | `icons.recent_hours` | `48` | How long an item counts as recent. |
+
+## Dock cards (big screens)
+
+| Key | Default | Meaning |
+|---|---|---|
+| `dock.cards` | all five | Which cards may use the free space beside the terminal, in the order they are placed: `git`, `system`, `services`, `day`, `notes`. Cards that do not fit are left out, so a laptop screen shows none. |
+| `week_start` | `"sun"` | First day of the week in the calendar: `"sun"`, `"sat"` or `"mon"`. |
+
+The **Today** card shows prayer times only when `prayer.enabled` is on and a location is set (see
+below); the Hijri date is the tabular calendar, so it can be a day away from the sighted date. Notes are
+saved as plain files in `~/.config/kiln/notes/` (one per project, and `_scratch.md`).
 
 Tests: the **tests** button in the work bar runs the project's test command through your login shell
 (so tools from `nvm` or a virtualenv are found), with `CI=true`, for up to 15 minutes. The output is

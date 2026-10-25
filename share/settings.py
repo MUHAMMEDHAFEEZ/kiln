@@ -39,6 +39,8 @@ DEFAULTS = {
     "terminal": {"project_commands": True},
     "modes": {"focus_mutes_notifications": True},
     "icons": {"recent_dot": True, "recent_hours": 48},
+    "dock": {"cards": ["git", "system", "services", "day", "notes"]},
+    "week_start": "sun",
     "integrations": {"github": True, "lark": False, "claude_code": True},
     "theme_apply": {"gtk": True, "dock": True, "gnome_terminal": True, "wallpaper": True},
 }
@@ -433,6 +435,23 @@ class Settings(Gtk.Window):
         if known:
             self.search_row.set_no_show_all(True)
             self.search_row.hide()
+        wk = Gtk.ComboBoxText()
+        for k, n in (("sun", "Sunday"), ("sat", "Saturday"), ("mon", "Monday")):
+            wk.append(k, n)
+        wk.set_active_id(self.cfg.get("week_start", "sun"))
+        wk.connect("changed", lambda c: self.set("week_start", c.get_active_id()))
+        box.pack_start(self.row("Calendar week starts on", wk), False, False, 0)
+        box.pack_start(label("Cards on big screens", "kiln-section"), False, False, 0)
+        box.pack_start(label("Kiln places the cards that fit in the free space next to the terminal. "
+                             "A laptop screen has none.", "kiln-sub", wrap=True), False, False, 0)
+        for key, title, hint in (("git", "Git", "Changed files and recent commits of the current project."),
+                                 ("system", "System", "CPU, memory, GPU, network, disk and the busiest programs."),
+                                 ("services", "Running", "Dev servers, services and Docker containers."),
+                                 ("day", "Today", "Calendar, Hijri date and prayer times (set your city under Lock screen & prayer)."),
+                                 ("notes", "Notes", "A scratchpad for each project, and a global one.")):
+            sw = Gtk.Switch(active=key in self.cfg["dock"]["cards"])
+            sw.connect("notify::active", lambda s_, _p, k=key: self.toggle_dock(k, s_.get_active()))
+            box.pack_start(self.row(title, sw, hint), False, False, 0)
         box.pack_start(label("Desktop behaviour", "kiln-section"), False, False, 0)
         box.pack_start(self.switch("terminal.project_commands", "Terminal buttons from the project",
                                    "The buttons under the terminal come from the project's own files "
@@ -445,6 +464,13 @@ class Settings(Gtk.Window):
                                    "A small dot marks folders and files changed in the last two days."),
                        False, False, 0)
         return box
+
+    def toggle_dock(self, key, on):
+        order = ["git", "system", "services", "day", "notes"]
+        cards = {c for c in self.cfg["dock"]["cards"] if c != key}
+        if on:
+            cards.add(key)
+        self.set("dock.cards", [k for k in order if k in cards])
 
     # ------------------------------------------------------------ projects
     def build_projects(self):

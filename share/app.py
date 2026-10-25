@@ -39,6 +39,7 @@ TODO = f"{APP}/todo.txt"
 UPDATER = f"{SHARE}/update-data.sh"
 sys.path.insert(0, SHARE)
 import iconkit as K  # noqa: E402
+import prayer as PR  # noqa: E402
 FONT = "Ubuntu Sans"
 
 # ---- settings (~/.config/kiln/config.json, documented in docs/CONFIGURATION.md)
@@ -53,6 +54,8 @@ DEFAULT_CONFIG = {
     "terminal": {"project_commands": True},
     "modes": {"focus_mutes_notifications": True},
     "icons": {"recent_dot": True, "recent_hours": 48},
+    "dock": {"cards": ["git", "system", "services", "day", "notes"]},
+    "week_start": "sun",
 }
 
 
@@ -192,9 +195,13 @@ def card_bg(cr, x, y, w, h, r=20, alpha=None):
     cr.stroke()
 
 
-def text(cr, s, x, y, size, color, bold=False, align="l", maxw=None, alpha=1.0, strike=False, mono=False):
-    """Draw text with its baseline at y. Returns the drawn width."""
+def text(cr, s, x, y, size, color, bold=False, align="l", maxw=None, alpha=1.0, strike=False, mono=False,
+         ltr=False):
+    """Draw text with its baseline at y. Returns the drawn width. ltr=True keeps Arabic text in a
+    left-to-right paragraph, so alignment and `maxw` behave like for any other text."""
     lay = PangoCairo.create_layout(cr)
+    if ltr:
+        lay.set_auto_dir(False)
     fd = Pango.FontDescription()
     fd.set_family("Hack" if mono else FONT)
     fd.set_weight(Pango.Weight.BOLD if bold else Pango.Weight.NORMAL)
@@ -3996,10 +4003,12 @@ MODES = ("overview", "coding", "focus")
 CMD_FILE = f"{CACHE}/cmd"          # `kiln mode ...` / `kiln test` drop their request here
 
 
-def _git(path, *args, timeout=3):
+def _git(path, *args, timeout=3, raw=False):
     try:
         r = subprocess.run(["git", "-C", path, *args], capture_output=True, text=True, timeout=timeout)
-        return r.stdout.strip() if r.returncode == 0 else None
+        if r.returncode != 0:
+            return None
+        return r.stdout if raw else r.stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -4207,12 +4216,28 @@ def github_url(path):
     return f"https://github.com/{m.group(1)}" if m else None
 
 
+def _status_code(xy):
+    if "?" in xy:
+        return "?"
+    for ch in ("U", "D", "A", "R"):
+        if ch in xy:
+            return ch
+    return "M"
+
+
 def scan_project(path, with_pr):
     if not path:
         return None
     info = dict(path=path, name=os.path.basename(path), branch=_git(path, "rev-parse", "--abbrev-ref", "HEAD"))
-    st = _git(path, "status", "--porcelain", timeout=6)
-    info["dirty"] = len(st.splitlines()) if st else 0
+    st = _git(path, "status", "--porcelain", timeout=6, raw=True)
+    lines = [l for l in (st or "").splitlines() if len(l) > 3]
+    info["dirty"] = len(lines)
+    info["files"] = [(_status_code(l[:2]), l[3:].split(" -> ")[-1].strip('"')) for l in lines[:60]]
+    info["log"] = []
+    for l in (_git(path, "log", "-8", "--format=%h%x09%ct%x09%an%x09%s") or "").splitlines():
+        parts = l.split("\t", 3)
+        if len(parts) == 4 and parts[1].isdigit():
+            info["log"].append((parts[0], int(parts[1]), parts[2], parts[3]))
     ab = _git(path, "rev-list", "--left-right", "--count", "@{u}...HEAD")
     info["behind"], info["ahead"] = (int(x) for x in ab.split()) if ab and len(ab.split()) == 2 else (0, 0)
     lc = _git(path, "log", "-1", "--format=%ct%x09%s")
@@ -4343,6 +4368,7 @@ class WorkBar(Gtk.DrawingArea):
             GLib.idle_add(lambda: (self.refresh(), False)[1])
         old = (self.servers, self.containers, self.proj)
         self.servers, self.containers = res["dev"]
+        WORK["dev"] = res["dev"]
         old_open = [p["path"] for p in self.opened]
         self.opened = res.get("open", [])
         if self.chosen and self.chosen not in [p["path"] for p in self.opened]:
@@ -4542,6 +4568,11 @@ class WorkBar(Gtk.DrawingArea):
                 items += [(None, None), ("Copy the command", lambda: copy_text(it["test"]))]
                 popup_menu(ev, items)
             return True
+        return self.dev_action(ev, key)
+
+    def dev_action(self, ev, key):
+        """Click / right-click on a dev server or container (used by the bar and the Running card)."""
+        kind, it = key
         url = f"http://localhost:{it['port']}" if kind == "srv" else \
             (f"http://localhost:{it['ports'][0]}" if it["ports"] else None)
         if kind == "srv":
@@ -4795,6 +4826,745 @@ class WorkBar(Gtk.DrawingArea):
         return False
 
 
+# ----------------------------------------------------------------- dock cards (extra widgets for big screens)
+def term_run(terminal, path, cmd):
+    """Open a terminal tab in `path` and run `cmd` there."""
+    terminal.new_tab(path or HOME)
+    GLib.timeout_add(400, lambda: (terminal.run_command(cmd), False)[1])
+
+
+def draw_spark(cr, x, y, w, h, vals, color, vmax=100.0):
+    if len(vals) < 2:
+        return
+    vmax = max(vmax, 1e-9)
+    pts = [(x + w * i / (len(vals) - 1), y + h - h * max(0, min(vmax, v)) / vmax) for i, v in enumerate(vals)]
+    cr.new_path()
+    cr.move_to(*pts[0])
+    for p in pts[1:]:
+        cr.line_to(*p)
+    cr.set_line_width(1.5)
+    cr.set_line_join(cairo.LINE_JOIN_ROUND)
+    set_rgba(cr, color, 1)
+    cr.stroke_preserve()
+    cr.line_to(x + w, y + h)
+    cr.line_to(x, y + h)
+    cr.close_path()
+    grad = cairo.LinearGradient(0, y, 0, y + h)
+    r, g, b = rgb(color)
+    grad.add_color_stop_rgba(0, r, g, b, 0.26)
+    grad.add_color_stop_rgba(1, r, g, b, 0.0)
+    cr.set_source(grad)
+    cr.fill()
+
+
+def fmt_bytes(n):
+    n = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit in ("B", "KB") else f"{n:.1f} {unit}"
+        n /= 1024
+
+
+def prayer_ready():
+    loc = CFG.get("location") or {}
+    return bool((CFG.get("prayer") or {}).get("enabled")) and \
+        isinstance(loc.get("latitude"), (int, float)) and isinstance(loc.get("longitude"), (int, float))
+
+
+class DockCard(Gtk.DrawingArea):
+    """A 330 px tall card in the free space of a big screen. Subclasses draw body() and handle activate()."""
+    KEY, TITLE, ICON = "", "", "folder"
+    H = 330
+    PREF_W = 500
+    TICK = 2
+
+    def __init__(self, terminal=None):
+        super().__init__()
+        self.terminal = terminal
+        self.W = self.PREF_W
+        self.set_size_request(self.W, self.H)
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.POINTER_MOTION_MASK |
+                        Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        self.hits, self.hover = [], None
+        self.connect("draw", self._on_draw)
+        self.connect("button-press-event", self._on_press)
+        self.connect("motion-notify-event", lambda _w, ev: self._set_hover(self._hit(ev.x, ev.y)))
+        self.connect("leave-notify-event", lambda *_: self._set_hover(None))
+        GLib.timeout_add_seconds(self.TICK, self._tick)
+
+    def _tick(self):
+        if self.get_mapped():
+            self.queue_draw()
+        return True
+
+    def set_width(self, w):
+        self.W = int(w)
+        self.set_size_request(self.W, self.H)
+        self.queue_resize()
+        self.queue_draw()
+
+    def _on_draw(self, _w, cr):
+        self._cr = cr
+        cr.set_operator(cairo.OPERATOR_CLEAR)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        self.hits = []
+        card_bg(cr, 0, 0, self.W, self.H, 20)
+        glyph(cr, self.ICON, 20, 16, 22, C["acc2"])
+        text(cr, self.TITLE, 52, 34, 16, C["text"], bold=True)
+        try:
+            self.body(cr, self.W, self.H)
+        except Exception as exc:                       # a broken card must not take the others down
+            print(f"kiln: {self.KEY} card: {exc!r}", flush=True)
+        return False
+
+    def body(self, cr, w, h):
+        pass
+
+    def region(self, key, x, y, w, h):
+        self.hits.append(((x, y, w, h), key))
+        if self.hover == key:
+            cr = self._cr
+            rrect(cr, x, y, w, h, 8)
+            set_rgba(cr, C["ink"], 0.07)
+            cr.fill()
+
+    def _hit(self, px, py):
+        for (x, y, w, h), key in reversed(self.hits):
+            if x <= px < x + w and y <= py < y + h:
+                return key
+        return None
+
+    def _set_hover(self, key):
+        if key != self.hover:
+            self.hover = key
+            win = self.get_window()
+            if win:
+                win.set_cursor(Gdk.Cursor.new_from_name(Gdk.Display.get_default(), "pointer") if key else None)
+            self.queue_draw()
+
+    def _on_press(self, _w, ev):
+        key = self._hit(ev.x, ev.y)
+        if key is None:
+            return False
+        self.activate(key, ev)
+        return True
+
+    def activate(self, key, ev):
+        pass
+
+
+# --- Git: the current project's working tree and recent commits
+class GitCard(DockCard):
+    KEY, TITLE, ICON, PREF_W = "git", "Git", "git-branch", 620
+    STATUS = {"M": "amber", "A": "mint", "D": "red", "R": "blue", "?": "dim", "U": "red"}
+
+    def body(self, cr, w, h):
+        proj = WORK.get("proj")
+        if not proj:
+            text(cr, "Open a project in VS Code or a terminal", 24, 98, 14, C["dim"])
+            return
+        pill(cr, w - 20, 33, proj["name"], 12, C["acc"], align="r")
+        self.region(("branch",), 14, 52, w - 28, 34)
+        glyph(cr, "git-branch", 22, 60, 16, C["acc2"])
+        bw = text(cr, proj.get("branch") or "detached", 46, 76, 13.5, C["text"], mono=True, maxw=w / 2 - 70)
+        x = 46 + bw + 12
+        if proj.get("ahead"):
+            x += pill(cr, x, 76, f"↑ {proj['ahead']}", 11.5, C["mint"]) + 6
+        if proj.get("behind"):
+            x += pill(cr, x, 76, f"↓ {proj['behind']}", 11.5, C["amber"]) + 6
+        dirty = proj.get("dirty", 0)
+        pill(cr, w - 22, 76, f"{dirty} changed" if dirty else "clean", 11.5, C["amber"] if dirty else C["mint"],
+             align="r")
+        hline(cr, 20, w - 20, 98)
+        colw = (w - 40 - 24) / 2
+        x0, x1 = 20, 20 + colw + 24
+        text(cr, "CHANGES", x0, 122, 11, C["dim"], bold=True)
+        text(cr, "RECENT COMMITS", x1, 122, 11, C["dim"], bold=True)
+        files = proj.get("files") or []
+        if not files:
+            text(cr, "Working tree clean", x0, 152, 13, C["dim"])
+        for i, (code, path) in enumerate(files[:7]):
+            y = 148 + i * 24
+            self.region(("file", path), x0 - 6, y - 16, colw + 12, 22)
+            col = C[self.STATUS.get(code, "dim")]
+            rrect(cr, x0, y - 13, 18, 18, 5)
+            set_rgba(cr, col, 0.18)
+            cr.fill()
+            text(cr, code, x0 + 9, y, 11, col, bold=True, align="c")
+            base, parent = os.path.basename(path), os.path.dirname(path)
+            bwid = text(cr, base, x0 + 26, y, 12.5, C["text"], maxw=colw - 30)
+            if parent and bwid < colw - 70:
+                text(cr, parent, x0 + 26 + bwid + 8, y, 11, C["dim"], maxw=colw - 30 - bwid - 8)
+        if len(files) > 7:
+            text(cr, f"+{len(files) - 7} more", x0 + 26, 316, 11.5, C["dim"])
+        log = proj.get("log") or []
+        for i, (sha, ts, _author, subject) in enumerate(log[:7]):
+            y = 148 + i * 24
+            self.region(("commit", sha), x1 - 6, y - 16, colw + 12, 22)
+            text(cr, sha, x1, y, 11.5, C["acc"], mono=True)
+            age = since(ts)
+            aw = text(cr, age, x1 + colw, y, 11, C["dim"], align="r")
+            text(cr, subject, x1 + 62, y, 12.5, C["text"], maxw=colw - 62 - aw - 8)
+
+    def activate(self, key, ev):
+        proj = WORK.get("proj")
+        if not proj:
+            return
+        kind = key[0]
+        if kind == "file":
+            run(["code", "-g", os.path.join(proj["path"], key[1])])
+        elif kind == "commit":
+            if proj.get("gh"):
+                open_url(f"{proj['gh']}/commit/{key[1]}")
+            elif self.terminal:
+                term_run(self.terminal, proj["path"], f"git show {key[1]}")
+        elif kind == "branch" and self.terminal:
+            term_run(self.terminal, proj["path"], "git status")
+
+
+# --- System: CPU, memory, GPU, network, disk and the busiest programs
+class SysSampler:
+    N = 40
+
+    def __init__(self):
+        self.hist = {k: [0.0] * self.N for k in ("cpu", "ram", "gpu", "down")}
+        self.now = dict(cpu=0.0, ram=0.0, ram_used=0, ram_total=0, gpu=None, gpu_temp=None, vram=None,
+                        vram_total=None, down=0.0, up=0.0, disk=0.0, disk_free=0, cpu_temp=None,
+                        batt=None, batt_state="", procs=[])
+        self._cpu, self._net, self._n = None, None, 0
+        self._temp_file = self._find_temp()
+        self._ncpu = os.cpu_count() or 1
+        import threading
+        threading.Thread(target=self._run, daemon=True).start()
+
+    @staticmethod
+    def _find_temp():
+        try:
+            for hw in sorted(os.listdir("/sys/class/hwmon")):
+                base = f"/sys/class/hwmon/{hw}"
+                if open(f"{base}/name").read().strip() in ("coretemp", "k10temp", "zenpower", "cpu_thermal"):
+                    return f"{base}/temp1_input"
+        except OSError:
+            pass
+        return None
+
+    def _run(self):
+        while True:
+            try:
+                self._sample()
+            except Exception as exc:
+                print(f"kiln: sampler: {exc!r}", flush=True)
+            time.sleep(2)
+
+    def _push(self, key, value):
+        h = self.hist[key]
+        h.append(value)
+        del h[0]
+
+    def _sample(self):
+        n = self.now
+        with open("/proc/stat") as f:
+            v = [int(x) for x in f.readline().split()[1:8]]
+        idle, total = v[3] + v[4], sum(v)
+        if self._cpu:
+            di, dt = idle - self._cpu[0], total - self._cpu[1]
+            n["cpu"] = 100.0 * (1 - di / dt) if dt > 0 else 0.0
+        self._cpu = (idle, total)
+        self._push("cpu", n["cpu"])
+        mem = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                k, val = line.split(":")
+                mem[k] = int(val.split()[0])
+        n["ram_total"] = mem["MemTotal"] * 1024
+        n["ram_used"] = (mem["MemTotal"] - mem["MemAvailable"]) * 1024
+        n["ram"] = 100.0 * n["ram_used"] / n["ram_total"]
+        self._push("ram", n["ram"])
+        rx = tx = 0
+        with open("/proc/net/dev") as f:
+            for line in f.readlines()[2:]:
+                name, rest = line.split(":", 1)
+                if name.strip() == "lo" or name.strip().startswith(("veth", "docker", "br-", "virbr")):
+                    continue
+                cols = rest.split()
+                rx, tx = rx + int(cols[0]), tx + int(cols[8])
+        now = time.time()
+        if self._net and now > self._net[2]:
+            dt = now - self._net[2]
+            n["down"], n["up"] = max(0, (rx - self._net[0]) / dt), max(0, (tx - self._net[1]) / dt)
+        self._net = (rx, tx, now)
+        self._push("down", n["down"])
+        du = shutil.disk_usage("/")
+        n["disk"], n["disk_free"] = 100.0 * du.used / du.total, du.free
+        if self._temp_file:
+            try:
+                n["cpu_temp"] = int(open(self._temp_file).read()) / 1000
+            except (OSError, ValueError):
+                pass
+        for b in ("BAT1", "BAT0"):
+            try:
+                n["batt"] = float(open(f"/sys/class/power_supply/{b}/capacity").read())
+                n["batt_state"] = open(f"/sys/class/power_supply/{b}/status").read().strip()
+                break
+            except (OSError, ValueError):
+                continue
+        if self._n % 2 == 0 and shutil.which("nvidia-smi"):
+            try:
+                out = subprocess.run(["nvidia-smi", "--query-gpu=utilization.gpu,temperature.gpu,memory.used,memory.total",
+                                      "--format=csv,noheader,nounits"], capture_output=True, text=True,
+                                     timeout=3).stdout.strip().splitlines()
+                u, t, mu, mt = [float(x) for x in out[0].split(",")]
+                n["gpu"], n["gpu_temp"], n["vram"], n["vram_total"] = u, t, mu, mt
+            except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+                n["gpu"] = None
+        if self._n % 2 == 0:
+            n["procs"] = self._top()
+        if n["gpu"] is not None:
+            self._push("gpu", n["gpu"])
+        self._n += 1
+
+    def _top(self):
+        """The three busiest programs, as a share of the whole CPU (top's second sample is the live one)."""
+        try:
+            out = subprocess.run(["top", "-b", "-n", "2", "-d", "0.7", "-o", "%CPU", "-w", "160"],
+                                 capture_output=True, text=True, timeout=6).stdout
+        except (OSError, subprocess.SubprocessError):
+            return []
+        block = out.split("\ntop - ")[-1].splitlines()
+        usage = {}
+        started = False
+        for line in block:
+            if line.strip().startswith("PID"):
+                started = True
+                continue
+            if not started or not line.strip():
+                continue
+            cols = line.split(None, 11)
+            if len(cols) < 12:
+                continue
+            try:
+                usage[cols[11].strip()] = usage.get(cols[11].strip(), 0.0) + float(cols[8].replace(",", "."))
+            except ValueError:
+                continue
+        ranked = sorted(usage.items(), key=lambda kv: -kv[1])[:3]
+        return [(name, cpu / self._ncpu) for name, cpu in ranked]
+
+
+_sampler = []
+
+
+def sampler():
+    if not _sampler:
+        _sampler.append(SysSampler())
+    return _sampler[0]
+
+
+class SystemCard(DockCard):
+    KEY, TITLE, ICON, PREF_W = "system", "System", "cpu", 520
+
+    def __init__(self, terminal=None):
+        super().__init__(terminal)
+        self.s = sampler()
+
+    def tile(self, cr, x, y, w, h, label, value, sub, hist=None, color=None, vmax=100.0):
+        rrect(cr, x, y, w, h, 12)
+        set_rgba(cr, C["ink"], 0.045)
+        cr.fill_preserve()
+        set_rgba(cr, C["border"], 0.5)
+        cr.set_line_width(1)
+        cr.stroke()
+        color = color or C["acc"]
+        text(cr, label, x + 14, y + 22, 10.5, C["dim"], bold=True)
+        text(cr, value, x + 14, y + 52, 20, C["text"], bold=True, maxw=w - 28)
+        text(cr, sub, x + 14, y + 71, 11, C["dim"], maxw=w - 28)
+        if hist:
+            draw_spark(cr, x + w * 0.52, y + 10, w * 0.44 - 6, h - 34, hist, color, vmax)
+
+    def body(self, cr, w, h):
+        n, hs = self.s.now, self.s.hist
+        tw, th, gap = (w - 40 - 10) / 2, 82, 8
+        x0, x1, y0 = 20, 20 + (w - 40 - 10) / 2 + 10, 58
+        temp = f" · {n['cpu_temp']:.0f}°C" if n["cpu_temp"] else ""
+        self.tile(cr, x0, y0, tw, th, "CPU", f"{n['cpu']:.0f}%", f"{os.cpu_count()} cores{temp}", hs["cpu"], C["acc"])
+        self.tile(cr, x1, y0, tw, th, "MEMORY", f"{n['ram_used'] / 2 ** 30:.1f} GB",
+                  f"of {n['ram_total'] / 2 ** 30:.0f} GB · {n['ram']:.0f}%", hs["ram"], C["acc2"])
+        if n["gpu"] is None:
+            self.tile(cr, x0, y0 + th + gap, tw, th, "GPU", "—", "no NVIDIA GPU found")
+        else:
+            gt = f" · {n['gpu_temp']:.0f}°C" if n["gpu_temp"] else ""
+            vram = f"{n['vram'] / 1024:.1f}/{n['vram_total'] / 1024:.0f} GB" if n["vram"] is not None else ""
+            self.tile(cr, x0, y0 + th + gap, tw, th, "GPU", f"{n['gpu']:.0f}%", f"{vram}{gt}", hs["gpu"], C["amber"])
+        peak = max(max(hs["down"]), 100 * 1024)
+        self.tile(cr, x1, y0 + th + gap, tw, th, "NETWORK", f"↓ {fmt_bytes(n['down'])}/s", f"↑ {fmt_bytes(n['up'])}/s",
+                  hs["down"], C["mint"], peak)
+        batt = ""
+        if n["batt"] is not None:
+            batt = f" · battery {n['batt']:.0f}%" + (" ⚡" if n["batt_state"] in ("Charging",) else "")
+        self.tile(cr, x0, y0 + 2 * (th + gap), tw, th, "DISK", f"{n['disk']:.0f}%",
+                  f"{fmt_bytes(n['disk_free'])} free{batt}", None)
+        bar = n["disk"] / 100
+        rrect(cr, x0 + tw * 0.52, y0 + 2 * (th + gap) + 30, tw * 0.44 - 6, 8, 4)
+        set_rgba(cr, C["ink"], 0.10)
+        cr.fill()
+        rrect(cr, x0 + tw * 0.52, y0 + 2 * (th + gap) + 30, max(8, (tw * 0.44 - 6) * bar), 8, 4)
+        set_rgba(cr, C["red"] if bar > 0.9 else (C["amber"] if bar > 0.75 else C["blue"]), 1)
+        cr.fill()
+        # the busiest programs
+        yy = y0 + 2 * (th + gap)
+        rrect(cr, x1, yy, tw, th, 12)
+        set_rgba(cr, C["ink"], 0.045)
+        cr.fill_preserve()
+        set_rgba(cr, C["border"], 0.5)
+        cr.set_line_width(1)
+        cr.stroke()
+        text(cr, "BUSIEST", x1 + 14, yy + 22, 10.5, C["dim"], bold=True)
+        for i, (name, cpu) in enumerate(n["procs"][:3]):
+            text(cr, name, x1 + 14, yy + 42 + i * 17, 12, C["text"], maxw=tw - 70)
+            text(cr, f"{cpu:.0f}%", x1 + tw - 14, yy + 42 + i * 17, 12, C["acc"], bold=True, align="r")
+        if not n["procs"]:
+            text(cr, "measuring…", x1 + 14, yy + 46, 12, C["dim"])
+
+
+# --- Running: dev servers, local services and Docker containers (same actions as the work bar)
+class ServicesCard(DockCard):
+    KEY, TITLE, ICON, PREF_W = "services", "Running", "bolt", 520
+
+    def __init__(self, terminal=None, qbar=None):
+        self.qbar = qbar
+        super().__init__(terminal)
+
+    def body(self, cr, w, h):
+        dev = WORK.get("dev")
+        if dev is None:
+            text(cr, "looking for servers…", 24, 98, 13.5, C["dim"])
+            return
+        servers, containers = dev
+        rows = [("srv", s) for s in servers]
+        if containers is not None:
+            rows.append(("hdr", "DOCKER"))
+            rows += [("box", c) for c in containers]
+        live = [s for s in servers if s["kind"] == "server"]
+        if not live:
+            text(cr, "No dev servers running", 24, 84, 13, C["dim"])
+        y = 108 if not live else 84
+        shown = 0
+        for kind, it in rows:
+            if y > h - 20:
+                break
+            if kind == "hdr":
+                text(cr, it, 24, y, 10.5, C["dim"], bold=True)
+                if not containers:
+                    text(cr, "no containers", 24 + 70, y, 11.5, C["dim"])
+                y += 22
+                continue
+            self.region((kind, it), 14, y - 17, w - 28, 26)
+            if kind == "srv":
+                col = C["mint"] if it["kind"] == "server" else C["dim"]
+                cr.new_path()
+                cr.arc(28, y - 5, 4, 0, 2 * math.pi)
+                set_rgba(cr, col, 1)
+                cr.fill()
+                pw = text(cr, f":{it['port']}", 42, y, 12.5, C["acc"], mono=True)
+                text(cr, it["label"], 42 + pw + 12, y, 12.5, C["text"], maxw=w - 42 - pw - 12 - 70)
+                if it["kind"] == "server":
+                    text(cr, "open ↗", w - 24, y, 11, C["dim"], align="r")
+            else:
+                cr.new_path()
+                cr.arc(28, y - 5, 4, 0, 2 * math.pi)
+                set_rgba(cr, C["mint"] if it["running"] else C["dim"], 1)
+                if it["running"]:
+                    cr.fill()
+                else:
+                    cr.set_line_width(1.5)
+                    cr.stroke()
+                text(cr, it["name"], 42, y, 12.5, C["text"], mono=True, maxw=w - 160)
+                if it["ports"]:
+                    text(cr, ", ".join(f":{p}" for p in it["ports"][:3]), w - 24, y, 11, C["dim"], align="r")
+            y += 28
+            shown += 1
+
+    def activate(self, key, ev):
+        if key[0] in ("srv", "box") and self.qbar:
+            self.qbar.dev_action(ev, key)
+
+
+# --- Today: a month calendar, the Hijri date and prayer times
+class DayCard(DockCard):
+    KEY, TITLE, ICON, PREF_W = "day", "Today", "calendar", 640
+    TICK = 20
+
+    @staticmethod
+    def specs():
+        return (560, 640) if prayer_ready() else (330, 360)
+
+    def _times(self, day):
+        loc, pr = CFG["location"], CFG["prayer"]
+        tz = time.localtime().tm_gmtoff / 3600
+        return PR.prayer_times(day.year, day.month, day.day, loc["latitude"], loc["longitude"], tz,
+                               pr.get("method", "mwl"), pr.get("asr", "standard"))
+
+    def body(self, cr, w, h):
+        import calendar as cal
+        today = datetime.date.today()
+        arabic = (CFG.get("prayer") or {}).get("language", "en") == "ar"
+        text(cr, PR.hijri_text(today.year, today.month, today.day, arabic) + " ≈", w - 22, 33, 12.5, C["dim"],
+             align="r", maxw=w - 130, ltr=True)
+        calw = 300 if prayer_ready() else w - 40
+        first = {"mon": 0, "sat": 5, "sun": 6}.get(str(CFG.get("week_start", "sun")).lower(), 6)
+        text(cr, today.strftime("%B %Y"), 20, 78, 14, C["text"], bold=True)
+        cell = calw / 7
+        names = ["M", "T", "W", "T", "F", "S", "S"]
+        order = [(first + i) % 7 for i in range(7)]
+        for i, d in enumerate(order):
+            text(cr, names[d], 20 + cell * i + cell / 2, 106, 11, C["dim"], bold=True, align="c")
+        weeks = cal.Calendar(first).monthdayscalendar(today.year, today.month)
+        for r, week in enumerate(weeks):
+            for c, day in enumerate(week):
+                if not day:
+                    continue
+                cx, cy = 20 + cell * c + cell / 2, 134 + r * 30
+                if day == today.day:
+                    cr.new_path()
+                    cr.arc(cx, cy - 5, 13, 0, 2 * math.pi)
+                    set_rgba(cr, C["acc"], 1)
+                    cr.fill()
+                    text(cr, str(day), cx, cy, 12.5, C["on_acc"], bold=True, align="c")
+                else:
+                    weekend = order[c] in (4, 5)
+                    text(cr, str(day), cx, cy, 12.5, C["dim"] if weekend else C["text"], align="c")
+        if not prayer_ready():
+            return
+        vline(cr, 340, 58, h - 22)
+        x0 = 362
+        city = (CFG.get("location") or {}).get("city") or "Prayer times"
+        text(cr, city.upper(), x0, 78, 11, C["dim"], bold=True, maxw=w - x0 - 20)
+        now = datetime.datetime.now()
+        t_today = self._times(today)
+        nxt, nxt_dt = None, None
+        order_p = ["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"]
+        for name in order_p:
+            hh = t_today[name]
+            when = datetime.datetime.combine(today, datetime.time()) + datetime.timedelta(hours=hh)
+            if when > now:
+                nxt, nxt_dt = name, when
+                break
+        if nxt is None:
+            tomorrow = today + datetime.timedelta(days=1)
+            nxt = "Fajr"
+            nxt_dt = datetime.datetime.combine(tomorrow, datetime.time()) + \
+                datetime.timedelta(hours=self._times(tomorrow)["Fajr"])
+        lang = (CFG.get("prayer") or {}).get("language", "en")
+        label = {"ar": dict(Fajr="الفجر", Sunrise="الشروق", Dhuhr="الظهر", Asr="العصر", Maghrib="المغرب", Isha="العشاء")}.get(
+            lang, {})
+        rows = ["Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha"]
+        for i, name in enumerate(rows):
+            y = 108 + i * 34
+            hh = t_today[name]
+            when = datetime.datetime.combine(today, datetime.time()) + datetime.timedelta(hours=hh)
+            is_next = name == nxt
+            passed = when <= now and not is_next
+            if is_next:
+                rrect(cr, x0 - 10, y - 20, w - x0 - 10, 30, 10)
+                set_rgba(cr, C["acc"], 0.16)
+                cr.fill()
+            col = C["acc"] if is_next else (C["dim"] if passed or name == "Sunrise" else C["text"])
+            text(cr, label.get(name, name), x0, y, 13.5 if name != "Sunrise" else 12, col, bold=is_next)
+            text(cr, when.strftime(HMP), w - 24 - (74 if is_next else 0), y, 13.5, col, bold=is_next, align="r")
+            if is_next:
+                mins = max(1, int((nxt_dt - now).total_seconds() // 60))
+                left = f"{mins // 60}h {mins % 60}m" if mins >= 60 else f"{mins} min"
+                text(cr, left, w - 24, y, 11.5, C["acc"], align="r")
+
+
+# --- Notes: a scratchpad per project (and a global one)
+NOTES_DIR = f"{APP}/notes"
+
+
+class NotesCard(Gtk.Box):
+    KEY, TITLE, PREF_W, H, HEAD = "notes", "Notes", 430, 330, 50
+
+    def __init__(self, terminal=None):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        self.W = self.PREF_W
+        self.target = "project"
+        self.cur_file, self._loading, self._save_id = None, False, 0
+        self.hits, self.hover = [], None
+        self.head = Gtk.DrawingArea()
+        self.head.set_size_request(120, self.HEAD)
+        self.head.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.POINTER_MOTION_MASK |
+                             Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        self.head.connect("draw", self._draw_head)
+        self.head.connect("button-press-event", self._press)
+        self.head.connect("motion-notify-event", lambda _w, ev: self._hover(self._hit(ev.x, ev.y)))
+        self.head.connect("leave-notify-event", lambda *_: self._hover(None))
+        self.view = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        self.view.get_style_context().add_class("kiln-notes")
+        self.view.set_left_margin(20)
+        self.view.set_right_margin(16)
+        self.view.set_top_margin(4)
+        self.view.set_bottom_margin(14)
+        self.buf = self.view.get_buffer()
+        self.buf.connect("changed", self._changed)
+        sc = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
+        sc.get_style_context().add_class("kiln-notes")
+        sc.add(self.view)
+        self.hint = Gtk.Label(xalign=0, yalign=0)
+        self.hint.get_style_context().add_class("kiln-hint")
+        self.hint.set_margin_start(20)
+        self.hint.set_margin_top(5)
+        self.hint.set_halign(Gtk.Align.START)
+        self.hint.set_valign(Gtk.Align.START)
+        over = Gtk.Overlay()
+        over.add(sc)
+        over.add_overlay(self.hint)
+        over.set_overlay_pass_through(self.hint, True)
+        self.pack_start(self.head, False, False, 0)
+        self.pack_start(over, True, True, 0)
+        self.set_size_request(self.W, self.H)
+        self._load()
+        GLib.timeout_add_seconds(2, self._follow_project)
+
+    def set_width(self, w):
+        self.W = int(w)
+        self.set_size_request(self.W, self.H)
+        self.queue_resize()
+
+    # --- which file
+    def _project(self):
+        proj = WORK.get("proj")
+        return proj["name"] if proj else None
+
+    def _path(self):
+        if self.target == "project" and self._project():
+            name = re.sub(r"[^A-Za-z0-9._-]", "_", self._project())
+            return f"{NOTES_DIR}/{name}.md"
+        return f"{NOTES_DIR}/_scratch.md"
+
+    def _load(self):
+        self._flush()
+        self.cur_file = self._path()
+        self._loading = True
+        try:
+            with open(self.cur_file, encoding="utf-8") as f:
+                self.buf.set_text(f.read())
+        except OSError:
+            self.buf.set_text("")
+        self._loading = False
+        self._update_hint()
+        self.head.queue_draw()
+
+    def _follow_project(self):
+        if self._path() != self.cur_file:
+            self._load()
+        return True
+
+    def _update_hint(self):
+        name = self._project() if self.target == "project" else None
+        self.hint.set_text(f"Notes for {name}…" if name else "Scratch notes…")
+        self.hint.set_visible(self.buf.get_char_count() == 0)
+
+    def _changed(self, *_):
+        self._update_hint()
+        if self._loading:
+            return
+        if self._save_id:
+            GLib.source_remove(self._save_id)
+        self._save_id = GLib.timeout_add(700, self._flush)
+
+    def _flush(self):
+        if self._save_id:
+            GLib.source_remove(self._save_id)
+        self._save_id = 0
+        if self.cur_file and not self._loading:
+            body = self.buf.get_text(self.buf.get_start_iter(), self.buf.get_end_iter(), True)
+            try:
+                if body.strip() or os.path.exists(self.cur_file):
+                    os.makedirs(NOTES_DIR, exist_ok=True)
+                    with open(self.cur_file, "w", encoding="utf-8") as f:
+                        f.write(body)
+            except OSError:
+                pass
+        return False
+
+    # --- header
+    def _hit(self, px, py):
+        for (x, y, w, h), key in reversed(self.hits):
+            if x <= px < x + w and y <= py < y + h:
+                return key
+        return None
+
+    def _hover(self, key):
+        if key != self.hover:
+            self.hover = key
+            self.head.queue_draw()
+
+    def _press(self, _w, ev):
+        key = self._hit(ev.x, ev.y)
+        if key and key[0] == "tab" and key[1] != self.target:
+            self.target = key[1]
+            self._load()
+        return True
+
+    def _draw_head(self, _w, cr):
+        self.hits = []
+        rrect(cr, 22, 18, 17, 20, 4)                       # a small notepad
+        set_rgba(cr, C["acc2"], 1)
+        cr.set_line_width(1.8)
+        cr.stroke()
+        for ly in (25, 30, 35):
+            cr.move_to(26, ly)
+            cr.line_to(35, ly)
+        cr.set_line_width(1.4)
+        cr.stroke()
+        x = 52
+        tabs = [("project", self._project() or "Project"), ("scratch", "Scratch")]
+        for key, label in tabs:
+            on = self.target == key
+            hot = self.hover == ("tab", key)
+            tw = text(cr, label, x, 34, 15 if on else 13, C["text"] if on or hot else C["dim"], bold=on, maxw=150)
+            self.hits.append(((x - 6, 12, tw + 12, 30), ("tab", key)))
+            x += tw + 18
+        return False
+
+
+# --- where the cards go: row 1 runs to the right edge, row 2 stops at the Focus card
+DOCK_ORDER = ["git", "system", "services", "day", "notes"]
+DOCK_MIN = {"git": 460, "system": 420, "services": 380, "day": 560, "notes": 320}
+DOCK_PREF = {"git": 620, "system": 520, "services": 520, "day": 640, "notes": 430}
+
+
+def plan_dock(L, wanted, specs):
+    """[(key, x, y, width)] for as many of the wanted cards as fit in the free space of the layout L."""
+    ex = L["extra"]
+    gap = ex["gap"]
+    x0 = L["term"][0] + ex["term0"][0] + gap
+    if L["focus"][1] - L["term"][1] >= DockCard.H + gap:
+        rows = [(L["term"][1], ex["W"] - ex["right"] - x0), (L["focus"][1], L["focus"][0] - gap - x0)]
+    else:
+        rows = [(L["term"][1], L["focus"][0] - gap - x0)]
+    out, rest = [], [k for k in wanted if k in specs]
+    for y, free in rows:
+        row, used = [], 0
+        while rest:
+            need = specs[rest[0]][0] + (gap if row else 0)
+            if used + need > free:
+                break
+            used += need
+            row.append(rest.pop(0))
+        if not row:
+            continue
+        room = free - gap * (len(row) - 1)
+        prefs = [specs[k][1] for k in row]
+        widths = [max(specs[k][0], int(p * room / sum(prefs))) for k, p in zip(row, prefs)]
+        widths[-1] = max(specs[row[-1]][0], room - sum(widths[:-1]))
+        x = x0
+        for k, wd in zip(row, widths):
+            out.append((k, x, y, wd))
+            x += wd + gap
+    return out
+
+
 # ----------------------------------------------------------------- windows
 def _css_rgba(hexs, a):
     r, g, b = (int(hexs[i:i + 2], 16) for i in (0, 2, 4))
@@ -4821,6 +5591,11 @@ menu menuitem:disabled, .menu menuitem:disabled { color: #$dim; }
 menu separator, .menu separator { background-color: $ink10; margin: 4px 6px; min-height: 1px; }
 menu arrow { color: #$dim; }
 tooltip, tooltip.background { background-color: $menu97; color: #$menu_fg; border: 1px solid $border50; border-radius: 8px; }
+textview.kiln-notes, textview.kiln-notes text { background-color: transparent; color: #$text; caret-color: #$acc; font-family: "$font"; font-size: 13.5px; }
+label.kiln-hint { color: #$dim; opacity: 0.65; font-family: "$font"; font-size: 13.5px; }
+textview.kiln-notes text selection { background-color: $sel35; color: #$text; }
+scrolledwindow.kiln-notes, scrolledwindow.kiln-notes viewport { background: transparent; }
+scrolledwindow.kiln-notes scrollbar slider { min-width: 4px; background-color: $ink10; border-radius: 2px; }
 dialog, dialog .dialog-vbox, dialog > box, colorchooser { background-color: #$menu; color: #$menu_fg; }
 dialog headerbar, dialog .titlebar { background: #$menu; color: #$menu_fg; border-bottom: 1px solid $border40; box-shadow: none; }
 dialog entry { background: $ink06; color: #$text; border: 1px solid $border60; border-radius: 10px; caret-color: #$acc; }
@@ -4834,7 +5609,7 @@ dialog button.default, dialog button.suggested-action { background: #$sel; borde
 def build_css():
     from string import Template
     v = dict(C)
-    v.update(ink06=_css_rgba(C["ink"], 0.06), ink10=_css_rgba(C["ink"], 0.10),
+    v.update(font=FONT, ink06=_css_rgba(C["ink"], 0.06), ink10=_css_rgba(C["ink"], 0.10),
              border40=_css_rgba(C["border"], 0.40), border45=_css_rgba(C["border"], 0.45),
              border50=_css_rgba(C["border"], 0.50), border60=_css_rgba(C["border"], 0.60),
              sel35=_css_rgba(C["sel"], 0.35), sel85=_css_rgba(C["sel"], 0.85), menu97=_css_rgba(C["menu"], 0.97))
@@ -4881,7 +5656,7 @@ def compute_layout(g, wa):
     W, H = g.width, g.height
     bar_y = H - bottom - WorkBar.H
     row2_top = top + CARDS_H + gap
-    term_h = max(TerminalCard.H, min(620, bar_y - gap - row2_top))
+    term_h = max(TerminalCard.H, min(760, bar_y - gap - row2_top))
     term_y = row2_top                               # directly under the cards, like on a small screen
     side_w = FocusCard.W + gap + NowPlaying.W
     term_w = max(TerminalCard.W, min(1500, W - left - right - side_w - gap))   # wider is not better
@@ -4948,6 +5723,22 @@ def main():
     w5 = make_window("Kiln Music", music, g.x + L["music"][0], g.y + L["music"][1], NowPlaying.W, NowPlaying.H)
     qbar = WorkBar(term)
     w6 = make_window("Kiln Workbar", qbar, g.x + L["bar"][0], g.y + L["bar"][1], WorkBar.W, WorkBar.H)
+
+    # dock cards: whatever fits in the free space of a big screen (nothing on a small one)
+    wanted = [k for k in DOCK_ORDER if k in ((CFG.get("dock") or {}).get("cards") or [])]
+    specs = {k: (DOCK_MIN[k], DOCK_PREF[k]) for k in DOCK_ORDER}
+    specs["day"] = DayCard.specs()
+    makers = {"git": lambda: GitCard(term), "system": lambda: SystemCard(term),
+              "services": lambda: ServicesCard(term, qbar), "day": lambda: DayCard(term),
+              "notes": lambda: NotesCard(term)}
+    dock = {}
+    for key, dx, dy, dw in plan_dock(L, wanted, specs):
+        card = makers[key]()
+        card.set_width(dw)
+        dwin = make_window(f"Kiln {key.title()}", card, g.x + dx, g.y + dy, dw, DockCard.H, resizable=True)
+        if key == "notes":                    # a plain box: its window paints the card behind it
+            dwin.connect("draw", lambda _w, cr, c=card: (card_bg(cr, 0, 0, c.W, c.H, 20), False)[-1])
+        dock[key] = dwin
     icons = IconsGrid(term)
     w4 = make_window("Kiln Icons", icons, g.x + L["icons"][0], g.y + L["icons"][1], ICONS_W, ICONS_H)
     launcher = Launcher(term, icons)
@@ -4964,6 +5755,7 @@ def main():
 
     # ---- modes: Overview (everything), Coding (terminal beside the cards), Focus (terminal only)
     wins = dict(cards=w1, term=w2, focus=w3, music=w5, bar=w6, icons=w4)
+    wins.update({f"dock_{k}": w for k, w in dock.items()})
     ex = L["extra"]
     state = {"mode": "overview"}
 
@@ -5060,7 +5852,7 @@ def main():
         return False
     for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
         GLib.unix_signal_add(GLib.PRIORITY_HIGH, sig, on_stop, sig.name)
-    for w in (w1, w2, w3, w4, w5, w6):
+    for w in (w1, w2, w3, w4, w5, w6, *dock.values()):
         w.show_all()
     cards.entry.hide()
     try:
