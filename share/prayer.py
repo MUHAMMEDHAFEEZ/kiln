@@ -23,6 +23,12 @@ METHODS = {
     "russia": {"fajr": 16, "isha": 15},
 }
 
+METHOD_NAMES = [("egypt", "Egyptian General Authority of Survey"), ("mwl", "Muslim World League"),
+                ("isna", "ISNA (North America)"), ("karachi", "University of Islamic Sciences, Karachi"),
+                ("makkah", "Umm al-Qura (Makkah)"), ("gulf", "Gulf region"), ("kuwait", "Kuwait"), ("qatar", "Qatar"),
+                ("singapore", "Singapore"), ("turkey", "Turkey (Diyanet)"), ("france", "France (UOIF)"),
+                ("russia", "Russia")]
+
 _rad = math.radians
 _deg = math.degrees
 

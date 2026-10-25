@@ -63,8 +63,9 @@ DEFAULT_CONFIG = {
     "terminal": {"project_commands": True},
     "modes": {"focus_mutes_notifications": True},
     "icons": {"recent_dot": True, "recent_hours": 48},
-    "dock": {"cards": ["git", "system", "day", "notes", "tests"]},
+    "dock": {"cards": ["git", "system", "day", "notes", "tests"], "position": "left"},
     "week_start": "sun",
+    "performance": "auto",
 }
 
 
@@ -84,6 +85,32 @@ def _load_config():
 
 
 CFG = _load_config()
+
+
+def _light_mode():
+    """True on a weak computer ("performance": "auto" looks at cores and memory), or when asked for."""
+    want = str(CFG.get("performance", "auto")).lower()
+    if want in ("low", "light"):
+        return True
+    if want in ("normal", "high"):
+        return False
+    try:
+        with open("/proc/meminfo") as f:
+            mem_kb = int(next(l for l in f if l.startswith("MemTotal")).split()[1])
+    except (OSError, StopIteration, ValueError):
+        mem_kb = 8_000_000
+    return (os.cpu_count() or 4) <= 2 or mem_kb < 4_500_000
+
+
+LIGHT = _light_mode()
+SLOW = 2.5 if LIGHT else 1.0          # how much slower the background timers run in light mode
+
+
+def every(seconds):
+    """A timer period in whole seconds, stretched in light mode."""
+    return max(1, round(seconds * SLOW))
+
+
 INTEGRATIONS = CFG.get("integrations", {})
 H24 = str(CFG.get("clock", "12h")).lower().startswith("24")
 HM = "%H:%M" if H24 else "%-I:%M"               # clock without the AM/PM part
@@ -334,6 +361,26 @@ def run(cmd):
                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
     except OSError:
         pass
+
+
+_dock_watch = []
+
+
+def enforce_dock_position():
+    """Keep the Ubuntu Dock where the layout expects it (config "dock.position", default left; "" = leave it)."""
+    pos = str((CFG.get("dock") or {}).get("position", "left")).upper()
+    src = Gio.SettingsSchemaSource.get_default()
+    if DEMO or pos not in ("LEFT", "RIGHT", "BOTTOM", "TOP") or not src or \
+            not src.lookup("org.gnome.shell.extensions.dash-to-dock", True):
+        return
+    st = Gio.Settings.new("org.gnome.shell.extensions.dash-to-dock")
+
+    def fix(*_):
+        if st.get_string("dock-position") != pos:
+            st.set_string("dock-position", pos)
+    fix()
+    st.connect("changed::dock-position", fix)       # moved by hand? put it back
+    _dock_watch.append(st)
 
 
 def open_url(url):
@@ -1085,7 +1132,7 @@ class Cards(Gtk.Overlay):
         if ev.button != 1:
             return False
         if kind == "strip":
-            run(["gnome-system-monitor"])
+            show_prayer_popup(ev.x_root, ev.y_root)
         elif kind == "task_toggle":
             self.toggle_item(key[1])
         elif kind == "task_row":
@@ -1098,6 +1145,8 @@ class Cards(Gtk.Overlay):
             self.today_tab, self.todo_off = key[1], 0
         elif kind == "acct_connect":
             self.open_accounts()
+        elif kind == "proj_setup":
+            run(["/usr/bin/python3", f"{SHARE}/settings.py", "projects"])
         elif kind == "event":
             if key[2]:
                 open_url(key[2])
@@ -1283,7 +1332,7 @@ class Cards(Gtk.Overlay):
     # 1) clock + vitals strip
     def card_strip(self, cr):
         x, y, w, h = self.card(cr, "strip")
-        self.region(cr, (x + 156, y + 8, w - 164, h - 16), ("strip",), r=12)
+        self.region(cr, (x + 8, y + 8, w - 16, h - 16), ("strip",), r=12)
         tw = text(cr, time.strftime(HM), x + 20, y + 54, 40, C["text"])
         if not H24:
             text(cr, time.strftime("%p"), x + 26 + tw, y + 54, 14, C["dim"], bold=True)
@@ -1662,7 +1711,23 @@ class Cards(Gtk.Overlay):
             cr.fill()
         hline(cr, x + 20, x + w - 20, y + 48)
         if not rows:
-            text(cr, "scanning repositories…", x + 24, y + 86, 13, C["dim"])
+            st = load_json(f"{CACHE}/projects.status") or {}
+            dirs = ", ".join(d.replace(HOME, "~") for d in st.get("dirs") or []) or "your project folders"
+            if st.get("state") == "done":
+                text(cr, "No git projects found", x + 24, y + 80, 14, C["text"])
+                text(cr, f"in {dirs}", x + 24, y + 102, 12, C["dim"], maxw=w - 48)
+                self.region(cr, (x + 14, y + 118, w - 28, 36), ("proj_setup",), r=12)
+                rrect(cr, x + 20, y + 124, w - 40, 26, 9)
+                set_rgba(cr, C["acc"], 1 if self.hover == ("proj_setup",) else 0.9)
+                cr.fill()
+                text(cr, "Choose project folders", x + w / 2, y + 142, 12.5, C["on_acc"], bold=True, align="c")
+            else:
+                n = st.get("found") or 0
+                total = st.get("total")
+                text(cr, "Looking for projects…", x + 24, y + 80, 14, C["text"])
+                text(cr, f"in {dirs}", x + 24, y + 102, 12, C["dim"], maxw=w - 48)
+                if total:
+                    text(cr, f"{total} folders to check · {n} ready", x + 24, y + 122, 12, C["dim"])
             return
         self.proj_off = max(0, min(self.proj_off, max(0, len(rows) - PROJ_ROWS)))
         names = load_names()
@@ -1729,7 +1794,7 @@ class TerminalCard(Gtk.Box):
             write_lines(QUICK, ["# one command per line (shown as buttons under the terminal)",
                                 "git status", "git pull", "npm run dev", "docker ps", "code ."])
         self.new_tab(os.path.expanduser("~/Desktop"))
-        GLib.timeout_add_seconds(1, self.poll_cwd)
+        GLib.timeout_add_seconds(every(1), self.poll_cwd)
         self._first_dir = not DEMO       # (a demo already starts in its project)
 
     def _area(self, h, draw, press, motion):
@@ -1814,6 +1879,38 @@ class TerminalCard(Gtk.Box):
         self.spawn(tab, pane)
         self.switch(len(self.tabs) - 1)
         return tab
+
+    def new_tab_targets(self):
+        """Menu items for a new tab anywhere: the project, the folder of this tab, the usual places, other
+        recent projects, or a folder you pick."""
+        items, seen = [], set()
+
+        def add(label, path):
+            if path and os.path.isdir(path) and path not in seen:
+                seen.add(path)
+                items.append((label, lambda p=path: self.new_tab(p)))
+        proj = WORK.get("proj")
+        if proj:
+            add(f"Project: {proj['name']}", proj["path"])
+        cwd = self.tabs[self.active]["cwd"]
+        add(f"This folder: {os.path.basename(cwd.rstrip('/')) or '/'}", cwd)
+        items.append((None, None))
+        for name, rel in (("Home", ""), ("Desktop", "Desktop"), ("Documents", "Documents"), ("Downloads", "Downloads")):
+            add(name, os.path.join(HOME, rel) if rel else HOME)
+        recent = [r for r in load_projects() if r["path"] not in seen][:6]
+        if recent:
+            items.append((None, None))
+            for r in recent:
+                add(r["name"], r["path"])
+        items.append((None, None))
+        items.append(("Choose a folder…", self.pick_folder))
+        return items
+
+    def pick_folder(self):
+        dlg = Gtk.FileChooserNative(title="Open a terminal in", action=Gtk.FileChooserAction.SELECT_FOLDER)
+        dlg.set_current_folder(self.tabs[self.active]["cwd"])
+        if dlg.run() == Gtk.ResponseType.ACCEPT and dlg.get_filename():
+            self.new_tab(dlg.get_filename())
 
     def _hook(self, tab, pane):
         t = pane["term"]
@@ -2080,8 +2177,10 @@ class TerminalCard(Gtk.Box):
             self.close_tab(key[1])
         elif kind == "close":
             self.close_tab(key[1])
-        elif kind == "plus":
+        elif kind == "plus" and ev.button == 1:
             self.new_tab(self.tabs[self.active]["cwd"])
+        elif kind == "plusmenu" or (kind == "plus" and ev.button == 3):
+            popup_menu(ev, self.new_tab_targets())
         elif kind == "hud" and self.on_hud:
             self.on_hud()
             self.head.queue_draw()
@@ -2160,6 +2259,14 @@ class TerminalCard(Gtk.Box):
             set_rgba(cr, C["ink"], 0.07)
             cr.fill()
         glyph(cr, "plus", tx + 7, 15, 14, C["dim"] if self.hover != ("plus",) else C["text"])
+        # "▾": open a tab somewhere else (home, desktop, another project, any folder)
+        mx = tx + 28
+        self.hits.append(((mx, 8, 18, 28), ("plusmenu",)))
+        if self.hover == ("plusmenu",):
+            rrect(cr, mx, 8, 18, 28, 9)
+            set_rgba(cr, C["ink"], 0.07)
+            cr.fill()
+        glyph(cr, "chevron-down", mx + 2, 16, 14, C["dim"] if self.hover != ("plusmenu",) else C["text"])
         # focus timer pill (only in Focus mode)
         if self.hud:
             label, running = self.hud()
@@ -2185,16 +2292,28 @@ class TerminalCard(Gtk.Box):
         """(label, command) buttons under the terminal: git, the project's own commands, then yours."""
         user = [l.strip() for l in read_lines(QUICK) if l.strip() and not l.lstrip().startswith("#")]
         proj = WORK.get("proj")
-        if proj and (CFG.get("terminal") or {}).get("project_commands", True):
-            root = proj["path"]
-            cwd = self.tabs[self.active]["cwd"]
-            inside = cwd == root or cwd.startswith(root + "/")
+        cwd = self.tabs[self.active]["cwd"]
+        if not (CFG.get("terminal") or {}).get("project_commands", True):
+            return [(c, c) for c in user][:8]
+        root = self._repo_of(cwd)                       # the buttons follow the folder this tab is in
+        if root:
             out = [("git status", "git status"), ("git pull", "git pull")]
-            for label, cmd in project_commands(root):
-                out.append((label, cmd if inside else f"cd {shlex.quote(root)} && {cmd}"))
+            out += [(label, cmd) for label, cmd in project_commands(root)]
             out += [(c, c) for c in user if all(c != x[0] for x in out)]
             return out[:12]
-        return [(c, c) for c in user][:8]
+        out = [("ls -la", "ls -la")] + [(c, c) for c in user if c != "ls -la"]
+        if proj:                                         # outside any repository: one tap back to the project
+            out.insert(0, (f"↩ {proj['name']}", f"cd {shlex.quote(proj['path'])}"))
+        return out[:10]
+
+    _repo_cache = {}
+
+    def _repo_of(self, cwd):
+        """Git folder that contains `cwd`, or None (looked up once per folder)."""
+        if cwd not in self._repo_cache:
+            top = _git(cwd, "rev-parse", "--show-toplevel", timeout=2)
+            self._repo_cache[cwd] = top if top and top not in (HOME, "/") else None
+        return self._repo_cache[cwd]
 
     def on_foot_motion(self, _w, ev):
         self.set_hover(self._hit(self.fhits, ev.x, ev.y))
@@ -2581,7 +2700,7 @@ class IconsGrid(Gtk.DrawingArea):
         self.reload()
         self._mon = Gio.File.new_for_path(DESKTOP).monitor_directory(Gio.FileMonitorFlags.NONE, None)
         self._mon.connect("changed", lambda *_: GLib.timeout_add(250, self._reload_once))
-        GLib.timeout_add_seconds(2, self._poll_files)
+        GLib.timeout_add_seconds(every(2), self._poll_files)
 
     # ---------------------------------------------------------- data
     @staticmethod
@@ -4338,7 +4457,7 @@ class WorkBar(Gtk.DrawingArea):
             if v.get("status") == "running":                          # left over from a previous session
                 v["status"] = "fail"
         self.refresh()
-        GLib.timeout_add_seconds(4, self.refresh)
+        GLib.timeout_add_seconds(every(4), self.refresh)
 
     # everything is gathered off the main loop (git / ss / gh can be slow)
     def refresh(self):
@@ -4957,7 +5076,7 @@ class DockCard(Gtk.DrawingArea):
         self.connect("button-press-event", self._on_press)
         self.connect("motion-notify-event", lambda _w, ev: self._set_hover(self._hit(ev.x, ev.y)))
         self.connect("leave-notify-event", lambda *_: self._set_hover(None))
-        GLib.timeout_add_seconds(self.TICK, self._tick)
+        GLib.timeout_add_seconds(every(self.TICK), self._tick)
 
     def _tick(self):
         if self.get_mapped():
@@ -5129,7 +5248,7 @@ class SysSampler:
                 self._sample()
             except Exception as exc:
                 print(f"kiln: sampler: {exc!r}", flush=True)
-            time.sleep(2)
+            time.sleep(2 * SLOW)
 
     def _push(self, key, value):
         h = self.hist[key]
@@ -5192,7 +5311,7 @@ class SysSampler:
                 n["gpu"], n["gpu_temp"], n["vram"], n["vram_total"] = u, t, mu, mt
             except (OSError, ValueError, IndexError, subprocess.SubprocessError):
                 n["gpu"] = None
-        if self._n % 2 == 0:
+        if self._n % (6 if LIGHT else 2) == 0:         # `top` is the costly part of a sample
             n["procs"] = [tuple(p) for p in DEMO["top"]] if DEMO and DEMO.get("top") else self._top()
         if n["gpu"] is not None:
             self._push("gpu", n["gpu"])
@@ -5570,7 +5689,7 @@ class NotesCard(Gtk.Box):
         self.pack_start(over, True, True, 0)
         self.set_size_request(self.W, self.H)
         self._load()
-        GLib.timeout_add_seconds(2, self._follow_project)
+        GLib.timeout_add_seconds(every(2), self._follow_project)
 
     def set_width(self, w):
         self.W = int(w)
@@ -5718,6 +5837,134 @@ def plan_dock(L, wanted, specs):
     return out
 
 
+# ----------------------------------------------------------------- prayer popup (click the clock card)
+PRAYER_ORDER = ("Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha")
+_prayer_win = []
+
+
+class PrayerPopup(Gtk.Window):
+    W, ROW = 380, 34
+
+    def __init__(self):
+        super().__init__(type=Gtk.WindowType.TOPLEVEL)
+        self.set_title("Kiln Prayer")
+        self.get_style_context().add_class("kiln")
+        self.set_app_paintable(True)
+        vis = self.get_screen().get_rgba_visual()
+        if vis:
+            self.set_visual(vis)
+        self.set_decorated(False)
+        self.set_resizable(False)
+        self.set_skip_taskbar_hint(True)
+        self.set_skip_pager_hint(True)
+        self.set_keep_above(True)
+        self.set_type_hint(Gdk.WindowTypeHint.UTILITY)
+        self.area = Gtk.DrawingArea()
+        self.area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.POINTER_MOTION_MASK |
+                             Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        self.add(self.area)
+        self.hits, self.hover, self.state, self._opened = [], None, None, 0
+        self.area.connect("draw", self.on_draw)
+        self.area.connect("button-press-event", self.on_press)
+        self.area.connect("motion-notify-event", self.on_motion)
+        self.area.connect("leave-notify-event", lambda *_: self.set_hover(None))
+        self.connect("key-press-event", lambda _w, ev: (self.hide(), True)[-1] if ev.keyval == Gdk.KEY_Escape else False)
+        # clicking anywhere else closes it (the first moments are ignored: the window is still being focused)
+        self.connect("focus-out-event", lambda *_: (self.hide() if time.time() - self._opened > 0.5 else None, False)[-1])
+        self.connect("draw", lambda _w, cr: (cr.set_operator(cairo.OPERATOR_CLEAR), cr.paint(),
+                                               cr.set_operator(cairo.OPERATOR_OVER), False)[-1])
+
+    def popup(self, px, py):
+        self.state = prayer_state()
+        h = 128 + (len(PRAYER_ORDER) * self.ROW + 74 if self.state else 118)
+        self.H = h
+        self.area.set_size_request(self.W, h)
+        self.resize(self.W, h)
+        scr = Gdk.Display.get_default().get_monitor_at_point(int(px), int(py)).get_geometry()
+        self.move(int(min(max(scr.x + 8, px - 30), scr.x + scr.width - self.W - 8)),
+                  int(min(max(scr.y + 30, py + 14), scr.y + scr.height - h - 8)))
+        self._opened = time.time()
+        self.show_all()
+        self.present()
+        self.area.queue_draw()
+
+    def set_hover(self, key):
+        if key != self.hover:
+            self.hover = key
+            self.area.queue_draw()
+
+    def on_motion(self, _w, ev):
+        self.set_hover(next((k for (x, y, w, h), k in reversed(self.hits) if x <= ev.x < x + w and y <= ev.y < y + h), None))
+
+    def on_press(self, _w, ev):
+        key = next((k for (x, y, w, h), k in reversed(self.hits) if x <= ev.x < x + w and y <= ev.y < y + h), None)
+        if key == ("settings",):
+            run(["/usr/bin/python3", f"{SHARE}/settings.py", "lock"])
+            self.hide()
+        return True
+
+    def on_draw(self, _w, cr):
+        self.hits = []
+        W, H = self.W, self.H
+        card_bg(cr, 0, 0, W, H, 20, alpha=0.98)
+        today = datetime.date.today()
+        pr = CFG.get("prayer") or {}
+        glyph(cr, "moon", 22, 20, 18, C["acc2"])
+        text(cr, time.strftime("%A, %-d %B %Y"), 50, 36, 15, C["text"], bold=True, maxw=W - 70)
+        text(cr, PR.hijri_text(today.year, today.month, today.day, True), 50, 60, 14, C["dim"], maxw=W - 70, ltr=True)
+        hline(cr, 20, W - 20, 78)
+        if not self.state:
+            text(cr, "Prayer times are off", 24, 112, 14, C["text"])
+            text(cr, "Set your city and turn them on in Settings.", 24, 134, 12, C["dim"], maxw=W - 48)
+            self.settings_button(cr, 24, H - 54, W - 48, "Open prayer settings")
+            return False
+        times, nxt, when = self.state
+        loc = CFG.get("location") or {}
+        text(cr, (loc.get("city") or "Your location") + " · " + dict(PR.METHOD_NAMES).get(pr.get("method", "mwl"), "").strip(),
+             24, 100, 12, C["dim"], maxw=W - 48)
+        midnight = datetime.datetime.combine(today, datetime.time())
+        now = datetime.datetime.now()
+        for i, name in enumerate(PRAYER_ORDER):
+            y = 114 + i * self.ROW
+            at = midnight + datetime.timedelta(hours=times[name])
+            is_next = name == nxt and name != "Sunrise"
+            passed = at < now and not is_next
+            if is_next:
+                rrect(cr, 14, y, W - 28, self.ROW - 4, 10)
+                set_rgba(cr, C["acc"], 0.16)
+                cr.fill()
+            col = C["dim"] if passed or name == "Sunrise" else C["text"]
+            cy = y + 22
+            text(cr, PRAYER_AR[name], 26, cy, 15, C["acc"] if is_next else col, bold=is_next, ltr=True, maxw=110)
+            text(cr, name, 130, cy, 12.5, C["dim"])
+            text(cr, at.strftime(HMP), W - 26, cy, 15, C["acc"] if is_next else col, bold=is_next, align="r")
+            if is_next:
+                text(cr, "in " + in_words(when - now), W - 120, cy, 11.5, C["dim"], align="r")
+        self.settings_button(cr, 24, H - 54, W - 48, "Prayer settings")
+        return False
+
+    def settings_button(self, cr, x, y, w, label):
+        hot = self.hover == ("settings",)
+        self.hits.append(((x, y, w, 34), ("settings",)))
+        rrect(cr, x, y, w, 34, 11)
+        set_rgba(cr, C["ink"], 0.10 if hot else 0.05)
+        cr.fill_preserve()
+        set_rgba(cr, C["border"], 0.9)
+        cr.set_line_width(1)
+        cr.stroke()
+        text(cr, label, x + w / 2, y + 22, 13, C["acc"] if hot else C["text"], align="c")
+
+
+def show_prayer_popup(px, py):
+    if not _prayer_win:
+        _prayer_win.append(PrayerPopup())
+    win = _prayer_win[0]
+    if win.get_visible():
+        win.hide()
+    else:
+        win.popup(px, py)
+
+
 # ----------------------------------------------------------------- windows
 def _css_rgba(hexs, a):
     r, g, b = (int(hexs[i:i + 2], 16) for i in (0, 2, 4))
@@ -5838,7 +6085,7 @@ def main():
     # journal (journalctl --user -u kiln); `kill -USR2 <pid>` dumps it on demand
     import faulthandler
     faulthandler.register(signal.SIGUSR2, all_threads=True)
-    GLib.timeout_add(1000, lambda: (faulthandler.dump_traceback_later(4), True)[1])
+    GLib.timeout_add(int(1000 * SLOW), lambda: (faulthandler.dump_traceback_later(int(4 * SLOW)), True)[1])
 
     if Gdk.Screen.get_default() is None:
         # no display (e.g. the session just ended): exit cleanly so systemd does not loop
@@ -6079,9 +6326,9 @@ def main():
     refresh("projects")
     refresh("github")
     refresh("accounts")
-    GLib.timeout_add_seconds(120, lambda: (refresh("projects"), True)[1])
-    GLib.timeout_add_seconds(300, lambda: (refresh("github"), True)[1])
-    GLib.timeout_add_seconds(120, lambda: (refresh("accounts"), True)[1])
+    GLib.timeout_add_seconds(every(120), lambda: (refresh("projects"), True)[1])
+    GLib.timeout_add_seconds(every(300), lambda: (refresh("github"), True)[1])
+    GLib.timeout_add_seconds(every(120), lambda: (refresh("accounts"), True)[1])
 
     def tick():
         cards.metrics.sample()
@@ -6094,9 +6341,10 @@ def main():
         qbar.queue_draw()
         return True
 
+    enforce_dock_position()
     cards.metrics.sample()
-    GLib.timeout_add_seconds(2, tick)
-    GLib.timeout_add_seconds(60, lambda: (icons.queue_draw(), True)[1])      # keeps the "recent" dots fresh
+    GLib.timeout_add_seconds(every(2), tick)
+    GLib.timeout_add_seconds(every(60), lambda: (icons.queue_draw(), True)[1])      # keeps the "recent" dots fresh
     Gtk.main()
 
 

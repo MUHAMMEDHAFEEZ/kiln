@@ -38,6 +38,8 @@ done
 [ "$list" = "[]" ] && list="@as []"
 gsettings set $MK custom-keybindings "$list"
 
+/usr/bin/python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import theme; theme.write_gtk_accent(None)' "$SHARE" 2>/dev/null || true
+
 if [ -d "$CONF/.restore" ]; then
   say "Restoring your previous GNOME settings"
   for p in /org/gnome/desktop/interface/ /org/gnome/desktop/background/ /org/gnome/shell/extensions/dash-to-dock/; do

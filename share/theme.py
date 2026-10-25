@@ -17,8 +17,10 @@ import json
 import math
 import os
 import random
+import re
 import subprocess
 import sys
+import time
 
 HOME = os.path.expanduser("~")
 SHARE = os.path.dirname(os.path.abspath(__file__))
@@ -403,6 +405,91 @@ def panel_css(t):
         sel_hover=rgba(c["sel"], 0.85), text="#" + c["text"], lock_card=rgba(c["card"], 0.78), menu_solid=rgba(c["menu"], 1.0))
 
 
+# --------------------------------------------------------------- app icon, GTK accent
+ICON_DEFAULTS = {"bg": "1c1b19", "c1": "e8a088", "c2": "d97757", "c3": "b5573a"}    # as drawn in share/desktop/*.svg
+ICON_DIR = f"{HOME}/.local/share/icons/hicolor"
+
+
+def write_app_icon(t):
+    """The Kiln app icon (menu, dock, Settings window) in the theme's colours."""
+    c = t["colors"]
+
+    def mix(a, b, k):
+        pa, pb = rgb_tuple(a), rgb_tuple(b)
+        return "".join(f"{round(pa[i] * (1 - k) + pb[i] * k):02x}" for i in range(3))
+    paint = {ICON_DEFAULTS["bg"]: c["panel"], ICON_DEFAULTS["c1"]: c["acc2"], ICON_DEFAULTS["c2"]: c["acc"],
+             ICON_DEFAULTS["c3"]: mix(c["acc"], "000000", 0.22)}
+    out = {}
+    for name in ("kiln", "kiln-small"):
+        try:
+            svg = open(f"{SHARE}/desktop/{name}.svg", encoding="utf-8").read()
+        except OSError:
+            return
+        for old, new in paint.items():
+            svg = svg.replace("#" + old, "#" + new)
+        out[name] = svg
+    os.makedirs(f"{ICON_DIR}/scalable/apps", exist_ok=True)
+    with open(f"{ICON_DIR}/scalable/apps/kiln.svg", "w", encoding="utf-8") as f:
+        f.write(out["kiln"])
+    try:                                                   # small sizes: the 2-layer drawing, as PNG
+        import gi
+        gi.require_version("GdkPixbuf", "2.0")
+        from gi.repository import GdkPixbuf
+        os.makedirs(CACHE, exist_ok=True)
+        for px in (16, 22, 24, 32):
+            src = f"{CACHE}/icon-{px}.svg"
+            with open(src, "w", encoding="utf-8") as f:
+                f.write(out["kiln-small" if px <= 24 else "kiln"])
+            os.makedirs(f"{ICON_DIR}/{px}x{px}/apps", exist_ok=True)
+            GdkPixbuf.Pixbuf.new_from_file_at_size(src, px, px).savev(f"{ICON_DIR}/{px}x{px}/apps/kiln.png", "png", [], [])
+            os.remove(src)
+    except Exception:                                      # no GdkPixbuf here: the scalable icon still changed
+        pass
+    sh("gtk-update-icon-cache", "-f", "-t", ICON_DIR)
+
+
+GTK_BLOCK = re.compile(r"/\* kiln:begin \*/.*?/\* kiln:end \*/\n?", re.S)
+
+
+def gtk_accent_css(c):
+    sel, on_sel, acc = "#" + c["sel"], "#" + c["on_sel"], "#" + c["acc"]
+    return ("/* kiln:begin */\n"
+            f"@define-color accent_bg_color {sel};\n@define-color accent_fg_color {on_sel};\n"
+            f"@define-color accent_color {acc};\n"
+            f"@define-color theme_selected_bg_color {sel};\n@define-color theme_selected_fg_color {on_sel};\n"
+            f"@define-color selected_bg_color {sel};\n@define-color selected_fg_color {on_sel};\n"
+            "/* kiln:end */\n")
+
+
+def write_gtk_accent(c, home=HOME):
+    """Apps built on GTK (GNOME Settings, Files, Kiln Settings ...) take the theme's accent colour, through a
+    marked block in ~/.config/gtk-3.0/gtk.css and gtk-4.0/gtk.css. Pass None to take the block out again."""
+    for d in ("gtk-3.0", "gtk-4.0"):
+        path = f"{home}/.config/{d}/gtk.css"
+        try:
+            old = open(path, encoding="utf-8").read()
+        except OSError:
+            old = ""
+        new = GTK_BLOCK.sub("", old).rstrip("\n")
+        if c:
+            new = (new + "\n\n" if new else "") + gtk_accent_css(c)
+        if new.strip() == old.strip():
+            continue
+        if not new.strip():
+            os.remove(path)
+            continue
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(new if new.endswith("\n") else new + "\n")
+
+
+def enforce_dock_position():
+    """Ubuntu Dock stays where Kiln's layout expects it (config dock.position, default left; "" leaves it)."""
+    pos = str((load_config().get("dock") or {}).get("position", "left")).upper()
+    if pos in ("LEFT", "RIGHT", "BOTTOM", "TOP"):
+        gset("org.gnome.shell.extensions.dash-to-dock", "dock-position", pos)
+
+
 # --------------------------------------------------------------- apply
 def desktop_folders():
     """Folders on the desktop in the order the icon grid shows them (icons.txt, then A-Z)."""
@@ -439,10 +526,19 @@ def apply(name):
         f.write(name + "\n")
 
     # GTK / icons / light-dark preference
+    same_icons = False
     if parts["gtk"]:
         gset("org.gnome.desktop.interface", "gtk-theme", sysd["gtk_theme"])
+        same_icons = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface", "icon-theme"],
+                                    capture_output=True, text=True).stdout.strip().strip("'") == sysd["icon_theme"]
         gset("org.gnome.desktop.interface", "icon-theme", sysd["icon_theme"])
         gset("org.gnome.desktop.interface", "color-scheme", sysd["color_scheme"])
+        write_gtk_accent(c)
+    write_app_icon(t)
+    if same_icons:               # an unchanged icon theme sends no signal: nudge it so the dock re-reads the icons
+        gset("org.gnome.desktop.interface", "icon-theme", "hicolor")
+        time.sleep(0.25)
+        gset("org.gnome.desktop.interface", "icon-theme", sysd["icon_theme"])
 
     # wallpaper
     wp = wallpaper_for(name, t) if parts["wallpaper"] else None
@@ -461,6 +557,7 @@ def apply(name):
         gset(D, "custom-theme-customize-running-dots", "true")
         gset(D, "custom-theme-running-dots-color", "#" + c["acc"])
         gset(D, "custom-theme-running-dots-border-color", "#" + c["acc"])
+        enforce_dock_position()
 
     # GNOME Terminal profile
     try:

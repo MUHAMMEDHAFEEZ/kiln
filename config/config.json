@@ -16,7 +16,8 @@
   "terminal": { "project_commands": true },
   "modes": { "focus_mutes_notifications": true },
   "icons": { "recent_dot": true, "recent_hours": 48 },
-  "dock": { "cards": ["git", "system", "day", "notes", "tests"] },
+  "dock": { "cards": ["git", "system", "day", "notes", "tests"], "position": "left" },
+  "performance": "auto",
   "week_start": "sun",
 
   "integrations": { "github": true, "lark": false, "claude_code": true },

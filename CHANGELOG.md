@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+* The Kiln app icon and the accent colour of GTK apps (GNOME Settings, Files, Kiln Settings) follow the theme.
+* The Ubuntu Dock is kept on the left (`dock.position`; Settings → General).
+* Clicking the clock card opens a prayer-times popup instead of the system monitor.
+* Projects are found by a faster scanner that shows its progress ("Looking for projects…", "No git projects found"
+  with a button to choose folders) and runs at low priority.
+* Terminal: **▾** next to **+** opens a tab in home, desktop, another project or any folder; the buttons under the
+  terminal follow the folder of the active tab.
+* Light mode for older computers (`performance`, automatic below 3 cores or 4 GB): about half the idle CPU.
+
 ## 1.1.0 (2026-10-25)
 
 * **Accounts**: connect Todoist, Trello, Linear, Asana, Jira, Notion, ClickUp, Slack, any iCal calendar

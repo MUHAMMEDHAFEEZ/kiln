@@ -26,6 +26,7 @@ SHARE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SHARE)
 import theme as T  # noqa: E402  (the theme engine: themes, wallpapers, applying)
 import accounts as AC  # noqa: E402  (task and calendar services)
+import prayer as PR  # noqa: E402  (calculation methods)
 
 CONF = T.APP
 CONFIG = f"{CONF}/config.json"
@@ -41,8 +42,9 @@ DEFAULTS = {
     "terminal": {"project_commands": True},
     "modes": {"focus_mutes_notifications": True},
     "icons": {"recent_dot": True, "recent_hours": 48},
-    "dock": {"cards": ["git", "system", "day", "notes", "tests"]},
+    "dock": {"cards": ["git", "system", "day", "notes", "tests"], "position": "left"},
     "week_start": "sun",
+    "performance": "auto",
     "integrations": {"github": True, "lark": False, "claude_code": True},
     "theme_apply": {"gtk": True, "dock": True, "gnome_terminal": True, "wallpaper": True},
 }
@@ -57,11 +59,7 @@ CITIES = [("Cairo", 30.0444, 31.2357), ("Alexandria", 31.2001, 29.9187), ("Riyad
           ("London", 51.5072, -0.1276), ("Paris", 48.8566, 2.3522), ("Berlin", 52.5200, 13.4050),
           ("New York", 40.7128, -74.0060), ("Toronto", 43.6532, -79.3832), ("Karachi", 24.8607, 67.0011),
           ("Kuala Lumpur", 3.1390, 101.6869), ("Jakarta", -6.2088, 106.8456), ("Sydney", -33.8688, 151.2093)]
-METHODS = [("egypt", "Egyptian General Authority of Survey"), ("mwl", "Muslim World League"),
-           ("isna", "ISNA (North America)"), ("karachi", "University of Islamic Sciences, Karachi"),
-           ("makkah", "Umm al-Qura (Makkah)"), ("gulf", "Gulf region"), ("kuwait", "Kuwait"), ("qatar", "Qatar"),
-           ("singapore", "Singapore"), ("turkey", "Turkey (Diyanet)"), ("france", "France (UOIF)"),
-           ("russia", "Russia")]
+METHODS = list(PR.METHOD_NAMES)
 
 CSS = b"""
 .kiln-title { font-size: 20px; font-weight: 700; }
@@ -137,6 +135,10 @@ class Settings(Gtk.Window):
         prov.load_from_data(CSS)
         Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov,
                                                  Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        self.accent_prov = Gtk.CssProvider()               # this window wears the current theme's accent
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), self.accent_prov,
+                                                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
+        self.refresh_accent()
 
         hb = Gtk.HeaderBar(show_close_button=True, title="Kiln Settings")
         self.set_titlebar(hb)
@@ -173,6 +175,26 @@ class Settings(Gtk.Window):
         self.page("lock", "Lock screen & prayer", self.build_lock())
         self.page("health", "Health check", self.build_health())
         self.show_all()
+
+    def refresh_accent(self):
+        c = (self.themes.get("themes", {}).get(self.current) or {}).get("colors")
+        if not c:
+            return
+        sel, on, acc = "#" + c["sel"], "#" + c["on_sel"], "#" + c["acc"]
+        css = f"""
+        stacksidebar row:selected, stacksidebar row:selected:hover {{ background-color: {sel}; color: {on}; }}
+        switch:checked {{ background-image: none; background-color: {sel}; border-color: {sel}; }}
+        button.suggested-action {{ background-image: none; background-color: {sel}; color: {on}; border-color: {sel}; }}
+        button.suggested-action:hover {{ background-image: none; background-color: alpha({sel}, 0.85); }}
+        scale highlight, scale fill {{ background-image: none; background-color: {sel}; border-color: {sel}; }}
+        scale slider:hover {{ border-color: {sel}; }}
+        progressbar progress {{ background-image: none; background-color: {sel}; }}
+        link, .kiln-pill {{ color: {acc}; }}
+        """
+        try:
+            self.accent_prov.load_from_data(css.encode())
+        except GLib.Error:
+            pass
 
     # ------------------------------------------------------------ plumbing
     def page(self, name, title, widget):
@@ -364,6 +386,7 @@ class Settings(Gtk.Window):
         self.apply_btn.set_sensitive(True)
         if ok:
             self.current = name
+            self.refresh_accent()
             self.status.set_text("Applied. The top bar and lock screen update at the next login.")
         else:
             self.status.set_text("Could not apply the theme: " + err.strip()[-200:])
@@ -448,6 +471,23 @@ class Settings(Gtk.Window):
         wk.set_active_id(self.cfg.get("week_start", "sun"))
         wk.connect("changed", lambda c: self.set("week_start", c.get_active_id()))
         box.pack_start(self.row("Calendar week starts on", wk), False, False, 0)
+
+        dk = Gtk.ComboBoxText()
+        for k, n in (("left", "Left (what Kiln is designed for)"), ("bottom", "Bottom"), ("right", "Right"),
+                     ("", "Leave it as it is")):
+            dk.append(k or "none", n)
+        dk.set_active_id(self.cfg["dock"].get("position") or "none")
+        dk.connect("changed", lambda c: self.set_dock_position(c.get_active_id()))
+        box.pack_start(self.row("Ubuntu Dock position", dk,
+                                "Kiln keeps the dock there, even if something moves it."), False, False, 0)
+        pf = Gtk.ComboBoxText()
+        for k, n in (("auto", "Automatic"), ("low", "Light (older or slower computers)"), ("normal", "Full")):
+            pf.append(k, n)
+        pf.set_active_id(self.cfg.get("performance", "auto"))
+        pf.connect("changed", lambda c: self.set("performance", c.get_active_id()))
+        box.pack_start(self.row("Performance", pf,
+                                "Light mode refreshes less often and scans less. Automatic picks it on "
+                                "computers with two cores or less than 4 GB of memory."), False, False, 0)
         box.pack_start(label("Cards on big screens", "kiln-section"), False, False, 0)
         box.pack_start(label("Kiln places the cards that fit in the free space next to the terminal. "
                              "A laptop screen has none.", "kiln-sub", wrap=True), False, False, 0)
@@ -472,6 +512,12 @@ class Settings(Gtk.Window):
                                    "A small dot marks folders and files changed in the last two days."),
                        False, False, 0)
         return box
+
+    def set_dock_position(self, pos):
+        pos = "" if pos == "none" else pos
+        self.set("dock.position", pos)
+        if pos:                                        # show the result at once
+            run_quiet("gsettings", "set", "org.gnome.shell.extensions.dash-to-dock", "dock-position", pos.upper())
 
     def toggle_dock(self, key, on):
         order = ["git", "system", "day", "notes", "tests", "services"]

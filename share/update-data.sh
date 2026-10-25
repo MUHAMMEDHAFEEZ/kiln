@@ -27,36 +27,8 @@ enabled() {   # enabled github  (GitHub is on unless switched off in config.json
 }
 
 projects() {
-  mapfile -t roots < <(cfg "c.get('project_dirs', ['~/Desktop'])")
-  [ ${#roots[@]} -gt 0 ] || roots=("~/Desktop")
-  mapfile -t skip < <(cfg "c.get('project_exclude', [])")
-  excl=(-not -path '*/node_modules/*' -not -path '*/.cache/*' -not -path '*/vendor/*')
-  for s in "${skip[@]}"; do [ -n "$s" ] && excl+=(-not -path "*/$s/*"); done
-  dirs=()
-  for r in "${roots[@]}"; do r="${r/#\~/$HOME}"; [ -d "$r" ] && dirs+=("$r"); done
-  [ ${#dirs[@]} -gt 0 ] || { : > "$CACHE/projects.all"; echo "total|0" > "$CACHE/projects.txt"; return; }
-  {
-    while IFS= read -r g; do
-      r="$(dirname "$g")"
-      ts="$(git -C "$r" log -1 --format=%ct 2>/dev/null)"
-      [ -z "$ts" ] && continue
-      br="$(git -C "$r" rev-parse --abbrev-ref HEAD 2>/dev/null)"
-      d="$(timeout 8 git -C "$r" status --porcelain -uno 2>/dev/null | wc -l)"
-      lang=""
-      if   [ -f "$r/pubspec.yaml" ]; then lang=Dart
-      elif [ -f "$r/tsconfig.json" ]; then lang=TypeScript
-      elif [ -f "$r/manage.py" ] || [ -f "$r/pyproject.toml" ] || [ -f "$r/requirements.txt" ] || [ -f "$r/setup.py" ]; then lang=Python
-      elif [ -f "$r/package.json" ]; then lang=JavaScript
-      elif [ -f "$r/go.mod" ]; then lang=Go
-      elif [ -f "$r/Cargo.toml" ]; then lang=Rust
-      elif [ -f "$r/build.gradle" ] || [ -f "$r/build.gradle.kts" ] || [ -f "$r/pom.xml" ]; then lang=Java
-      fi
-      echo "$ts|$(basename "$r")|$br|$d|$r|$lang"
-    done < <(find "${dirs[@]}" -maxdepth 4 -name .git -type d "${excl[@]}" 2>/dev/null)
-  } | sort -t'|' -k1 -nr | awk -F'|' '!seen[$2]++' > "$CACHE/projects.all"
-  total="$(wc -l < "$CACHE/projects.all")"
-  { echo "total|$total"; head -40 "$CACHE/projects.all"; } > "$CACHE/projects.tmp" \
-    && mv "$CACHE/projects.tmp" "$CACHE/projects.txt"
+  # the walk and the git questions live in scan-projects.py (it reads project_dirs / project_exclude itself)
+  /usr/bin/python3 "$(dirname "$0")/scan-projects.py"
 }
 
 github() {
@@ -100,7 +72,7 @@ accounts() {
 
 case "$which" in
   projects|github|accounts)
-    ( flock -n 9 || exit 0; "$which" ) 9>"$CACHE/.lock.$which" >/dev/null 2>&1 &
+    ( flock -n 9 || exit 0; renice -n 15 $BASHPID >/dev/null 2>&1; "$which" ) 9>"$CACHE/.lock.$which" >/dev/null 2>&1 &
     ;;
 esac
 exit 0

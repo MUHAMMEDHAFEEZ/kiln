@@ -255,6 +255,8 @@ def main():
     os.makedirs(f"{share}/icons", exist_ok=True)
     with open(f"{share}/kiln.svg", "w", encoding="utf-8") as f:
         f.write(svg_symbol(512, 0.16, bg=BG, radius=0.22))
+    with open(f"{share}/kiln-small.svg", "w", encoding="utf-8") as f:       # recoloured per theme (theme.py)
+        f.write(svg_symbol(512, 0.16, bg=BG, radius=0.22, variant="small"))
     for px in (16, 22, 24, 32):                       # the 2-layer mark is clearer at small sizes
         src = "app-icon-2layer.svg" if px <= 24 else "app-icon.svg"
         pb = GdkPixbuf.Pixbuf.new_from_file_at_size(f"{OUT}/{src}", px, px)

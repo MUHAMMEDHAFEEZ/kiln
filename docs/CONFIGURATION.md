@@ -29,6 +29,7 @@ All settings live in **`~/.config/kiln/config.json`**. Open it with `kiln config
   "icons": { "recent_dot": true, "recent_hours": 48 },
   "dock": { "cards": ["git", "system", "day", "notes", "tests"] },
   "week_start": "sun",
+  "performance": "auto",
 
   "integrations": { "github": true, "lark": false, "claude_code": true },
   "theme_apply": { "gtk": true, "dock": true, "gnome_terminal": true, "wallpaper": true }
@@ -42,7 +43,7 @@ All settings live in **`~/.config/kiln/config.json`**. Open it with `kiln config
 | `desktop_name` | `"{Host}'s Desktop"` | Name in the top bar. `{Host}` is the capitalised machine name; `{host}` and `{user}` also work. |
 | `clock` | `"12h"` | `"12h"` or `"24h"`. Used by the cards, the agenda and the lock screen. |
 | `desktop_dir` | `""` | Folder whose contents the desktop icons show. Empty means your XDG Desktop folder. |
-| `project_dirs` | `["~/Desktop"]` | Folders that are searched (4 levels deep) for git repositories. These feed the Projects card, the launcher and the work bar. |
+| `project_dirs` | `["~/Desktop"]` | Folders that are searched (a project may sit up to three folders down) for git repositories. These feed the Projects card, the launcher and the work bar. |
 | `project_exclude` | `[]` | Folder names to skip while searching, e.g. `["OpenSource", "archive"]`. `node_modules`, `vendor` and `.cache` are always skipped. |
 | `web_search` | DuckDuckGo | The launcher's last result. `{q}` is replaced by your search. Example: `{"name": "Google", "url": "https://www.google.com/search?q={q}"}`. |
 
@@ -82,6 +83,8 @@ They are calculated on your machine and follow your system's time zone and dayli
 | Key | Default | Meaning |
 |---|---|---|
 | `dock.cards` | `git`, `system`, `day`, `notes`, `tests` | Which cards may use the free space beside the terminal, in the order they are placed: `git`, `system`, `day`, `notes`, `tests`, `services`. `services` (dev servers and containers) is off by default because the work bar already shows them. Cards that do not fit are left out, so a laptop screen shows none. |
+| `dock.position` | `"left"` | Where Kiln keeps the Ubuntu Dock: `"left"`, `"right"`, `"bottom"` or `""` to leave it alone. Kiln puts it back at once if something moves it. |
+| `performance` | `"auto"` | `"low"` makes Kiln lighter on older computers: background refreshes run about 2.5 times less often and the busiest-programs sample is taken less often. `"auto"` picks it on a computer with two cores or less, or under 4 GB of memory. `"normal"` never does. |
 | `week_start` | `"sun"` | First day of the week in the calendar: `"sun"`, `"sat"` or `"mon"`. |
 
 The **Today** card shows prayer times only when `prayer.enabled` is on and a location is set (see
