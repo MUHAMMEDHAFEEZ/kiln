@@ -337,7 +337,8 @@ def run(cmd):
 
 
 def open_url(url):
-    run(["xdg-open", url])
+    if str(url).startswith(("http://", "https://")):      # never hand xdg-open a file: or custom-scheme address
+        run(["xdg-open", url])
 
 
 def refresh(what):
@@ -838,8 +839,7 @@ def load_acct_done():
 
 def save_acct_done(done):
     try:
-        with open(ACCT_DONE_FILE, "w", encoding="utf-8") as f:
-            json.dump({"date": time.strftime("%Y-%m-%d"), "done": done}, f)
+        ACC.write_private(ACCT_DONE_FILE, {"date": time.strftime("%Y-%m-%d"), "done": done})
     except OSError:
         pass
 

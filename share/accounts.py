@@ -34,6 +34,7 @@ ACCOUNTS_FILE = f"{CONF}/accounts.json"
 CACHE_FILE = f"{CACHE}/accounts.json"
 TIMEOUT = 15
 WEEK = 7 * 86400
+MAX_PER_EVENT, MAX_PER_FEED = 64, 300      # limits for one repeating event and for one calendar feed
 
 
 class ServiceError(Exception):
@@ -56,14 +57,19 @@ def load_accounts():
         return {}
 
 
-def save_accounts(data):
-    os.makedirs(CONF, mode=0o700, exist_ok=True)
-    tmp = ACCOUNTS_FILE + ".tmp"
+def write_private(path, data, indent=None):
+    """JSON file only the user can read, replaced atomically."""
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    tmp = path + ".tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-    os.replace(tmp, ACCOUNTS_FILE)
-    os.chmod(ACCOUNTS_FILE, 0o600)
+        json.dump(data, f, indent=indent)
+    os.replace(tmp, path)
+    os.chmod(path, 0o600)
+
+
+def save_accounts(data):
+    write_private(ACCOUNTS_FILE, data, indent=2)
 
 
 def connected():
@@ -147,14 +153,24 @@ def end_of_day(v):
     return ts(v)
 
 
+def safe_url(url):
+    """Only web links are kept: a service (or a calendar feed) must not be able to hand Kiln a file: or
+    custom-scheme address to open."""
+    try:
+        u = urllib.parse.urlparse(str(url or "").strip())
+    except ValueError:
+        return ""
+    return u.geturl() if u.scheme in ("http", "https") and u.hostname else ""
+
+
 def task(service, tid, title, due=None, url="", detail=""):
     return dict(service=service, id=str(tid), title=(title or "(untitled)").strip() or "(untitled)",
-                due=due, url=url or "", detail=detail or "")
+                due=due, url=safe_url(url), detail=detail or "")
 
 
 def event(service, title, start, end=None, url=""):
     return dict(service=service, title=(title or "(no title)").strip() or "(no title)",
-                start=start, end=end or start + 1800, url=url or "")
+                start=start, end=end or start + 1800, url=safe_url(url))
 
 
 # ----------------------------------------------------------------- services
@@ -675,8 +691,27 @@ WINDOWS_TZ = {
     "E. Europe Standard Time": "Europe/Chisinau", "South Africa Standard Time": "Africa/Johannesburg",
     "AUS Eastern Standard Time": "Australia/Sydney", "UTC": "UTC",
 }
-MEETING_RE = re.compile(r"https://[^\s<>\"'\\]*(?:zoom\.us|meet\.google\.com|teams\.microsoft\.com|teams\.live\.com|"
-                        r"webex\.com|whereby\.com|around\.co|chime\.aws|lark(?:suite)?\.com/(?:vc|calendar))[^\s<>\"'\\]*")
+URL_RE = re.compile(r"https://[^\s<>\"'\\]+")
+MEETING_HOSTS = ("zoom.us", "meet.google.com", "teams.microsoft.com", "teams.live.com", "webex.com", "whereby.com",
+                 "around.co", "chime.aws")
+LARK_HOSTS = ("larksuite.com", "lark.com")          # only their video-call and calendar pages
+
+
+def meeting_url(blob):
+    """The first video-call link in a text, judged by the address's host (so https://evil.test/?zoom.us or
+    https://zoom.us.evil.test do not count)."""
+    for m in URL_RE.finditer(blob):
+        url = m.group(0).rstrip(".,;)")
+        try:
+            u = urllib.parse.urlparse(url)
+            host = (u.hostname or "").lower()
+        except ValueError:
+            continue
+        if any(host == d or host.endswith("." + d) for d in MEETING_HOSTS):
+            return url
+        if any(host == d or host.endswith("." + d) for d in LARK_HOSTS) and u.path.startswith(("/vc", "/calendar")):
+            return url
+    return ""
 
 
 def _unfold(text):
@@ -778,8 +813,7 @@ def ics_events(text, win_start, win_end, service="calendar"):
         except (ValueError, KeyError):
             continue
         blob = _unescape(" ".join(v for k in ("URL", "LOCATION", "DESCRIPTION") for _pp, v in p.get(k, [])))
-        m = MEETING_RE.search(blob)
-        info = dict(title=_unescape((p.get("SUMMARY") or [({}, "")])[0][1]), url=m.group(0) if m else "",
+        info = dict(title=_unescape((p.get("SUMMARY") or [({}, "")])[0][1]), url=meeting_url(blob),
                     uid=(p.get("UID") or [({}, "")])[0][1], dur=end - start)
         if "RECURRENCE-ID" in p:
             try:
@@ -799,11 +833,15 @@ def ics_events(text, win_start, win_end, service="calendar"):
             singles.append((start, end, info))
     out = [(s, e, i) for s, e, i in singles]
     for start, rule, ex, info in masters:
+        if re.search(r"FREQ=(SECONDLY|MINUTELY)", rule, re.I):      # nobody meets every minute; a feed that says so
+            continue                                                  # could make Kiln count for a very long time
         rule = re.sub(r"UNTIL=(\d{8}T\d{6})(?![\dZ])", r"UNTIL=\1Z", rule)
         rule = re.sub(r"UNTIL=(\d{8})(?![\dT])", r"UNTIL=\1T235959Z", rule)
         try:
             r = rrule.rrulestr(rule, dtstart=start)
-            for occ in r.between(win_start - info["dur"], win_end, inc=True):
+            for occ in r.xafter(win_start - info["dur"], count=MAX_PER_EVENT, inc=True):
+                if occ >= win_end:
+                    break
                 if occ in ex or (info["uid"], occ) in skip:
                     continue
                 out.append((occ, occ + info["dur"], info))
@@ -812,15 +850,22 @@ def ics_events(text, win_start, win_end, service="calendar"):
     result = [event(service, i["title"], s.timestamp(), e.timestamp(), i["url"]) for s, e, i in out
               if e > win_start and s < win_end]
     result.sort(key=lambda ev: ev["start"])
-    return result
+    return result[:MAX_PER_FEED]
 
 
 # ----------------------------------------------------------------- the cache the cards read
+_seen = {}
+
+
 def read_cache():
     try:
-        with open(CACHE_FILE, encoding="utf-8") as f:
-            d = json.load(f)
-        return d if isinstance(d, dict) else {}
+        st = os.stat(CACHE_FILE)
+        key = (CACHE_FILE, st.st_mtime_ns, st.st_size)
+        if _seen.get("key") != key:
+            with open(CACHE_FILE, encoding="utf-8") as f:
+                d = json.load(f)
+            _seen.update(key=key, data=d if isinstance(d, dict) else {})
+        return _seen["data"]
     except (OSError, ValueError):
         return {}
 
@@ -849,11 +894,7 @@ def sync(only=None):
             entry.setdefault("tasks", [])
             entry.setdefault("events", [])
         result[sid] = entry
-    os.makedirs(CACHE, exist_ok=True)
-    tmp = CACHE_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"updated": time.time(), "services": result}, f)
-    os.replace(tmp, CACHE_FILE)
+    write_private(CACHE_FILE, {"updated": time.time(), "services": result})
     return result
 
 

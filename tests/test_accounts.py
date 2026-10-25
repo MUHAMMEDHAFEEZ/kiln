@@ -271,6 +271,29 @@ class IcsTests(unittest.TestCase):
         want = datetime.datetime.combine(d, datetime.time(18), tzinfo=zoneinfo.ZoneInfo("Europe/Berlin"))
         self.assertEqual(berlin["start"], want.timestamp())
 
+    def test_meeting_links_are_judged_by_host(self):
+        good = A.meeting_url("Join: https://us02web.zoom.us/j/123?pwd=x, thanks")
+        self.assertEqual(good, "https://us02web.zoom.us/j/123?pwd=x")
+        for bad in ("https://evil.test/?next=zoom.us", "https://zoom.us.evil.test/j/1", "http://zoom.us/j/1",
+                    "https://notzoom.us/j/1", "https://example.larksuite.com/docs/x"):
+            self.assertEqual(A.meeting_url(bad), "", bad)
+        self.assertTrue(A.meeting_url("https://x.larksuite.com/vc/abc"))
+
+    def test_only_web_links_survive(self):
+        self.assertEqual(A.safe_url("https://a.test/x"), "https://a.test/x")
+        for bad in ("file:///etc/passwd", "lark://open", "javascript:alert(1)", "", None, "https://"):
+            self.assertEqual(A.safe_url(bad), "", bad)
+        self.assertEqual(A.task("t", 1, "x", url="file:///etc/passwd")["url"], "")
+
+    def test_repeat_limits(self):
+        utc = datetime.timezone.utc
+        start = datetime.datetime(2030, 1, 1, tzinfo=utc)
+        body = ("BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:m\nDTSTART:20200101T000000Z\nDTEND:20200101T000100Z\n"
+                "RRULE:FREQ={f}\nSUMMARY:x\nEND:VEVENT\nEND:VCALENDAR\n")
+        self.assertEqual(A.ics_events(body.format(f="MINUTELY"), start, start + datetime.timedelta(days=30)), [])
+        got = A.ics_events(body.format(f="HOURLY"), start, start + datetime.timedelta(days=30))
+        self.assertEqual(len(got), A.MAX_PER_EVENT)             # 720 hours in the window, capped
+
     def test_calendar_url_parsing(self):
         urls = A.SERVICES["calendar"].urls({"urls": "webcal://x.test/a.ics\n\n https://y.test/b.ics "})
         self.assertEqual(urls, ["https://x.test/a.ics", "https://y.test/b.ics"])
@@ -284,6 +307,8 @@ class StoreTests(unittest.TestCase):
             A.ACCOUNTS_FILE, A.CACHE_FILE = A.CONF + "/accounts.json", A.CACHE + "/accounts.json"
             A.save_accounts({"todoist": {"token": "t", "_base": "http://127.0.0.1:9"}})
             self.assertEqual(oct(os.stat(A.ACCOUNTS_FILE).st_mode & 0o777), "0o600")
+            A.sync()
+            self.assertEqual(oct(os.stat(A.CACHE_FILE).st_mode & 0o777), "0o600")      # the cache is private too
             self.assertEqual(A.connected(), ["todoist"])
             r = A.sync()
             self.assertFalse(r["todoist"]["ok"])

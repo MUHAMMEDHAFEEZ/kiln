@@ -9,6 +9,8 @@
 * Agenda is no longer Lark-only, and shows a clear way to connect a calendar.
 * Demo mode and screenshots tool (`tools/demo.py`), tests (`python3 -m unittest discover -s tests`),
   README screenshots and a tour GIF.
+* Hardening: web links only (no `file:` or custom schemes), video-call links matched by host, limits on repeating
+  calendar events, and the accounts cache is private to you.
 * The installer no longer carries the migration from the project's earlier name.
 * Terminal: split panes, new tabs open in the current project, and the buttons under it come from the
   project's own files.
