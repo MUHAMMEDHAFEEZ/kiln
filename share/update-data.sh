@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Refreshes Kiln's data caches in the background and returns immediately.
-#   update-data.sh projects | github | lark
+#   update-data.sh projects | github | accounts
 # Which folders are scanned for git projects, and which integrations run, is set in
 # ~/.config/kiln/config.json ("project_dirs", "project_exclude", "integrations").
 export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
@@ -22,9 +22,8 @@ print("\n".join(map(str, v)) if isinstance(v, list) else ("" if v is None else v
 PY
 }
 
-enabled() {   # enabled github|lark  (GitHub is on unless switched off, Lark is opt-in)
-  local def=True; [ "$1" = lark ] && def=False
-  [ "$(cfg "c.get('integrations', {}).get('$1', $def)")" = True ]
+enabled() {   # enabled github  (GitHub is on unless switched off in config.json)
+  [ "$(cfg "c.get('integrations', {}).get('$1', True)")" = True ]
 }
 
 projects() {
@@ -94,25 +93,13 @@ github() {
   rm -f "$CACHE/github-gql.tmp"
 }
 
-lark() {
-  enabled lark || { rm -f "$CACHE"/lark-*.json; exit 0; }
-  # Lark tasks + today's agenda through the official lark-cli (credentials live in the OS keychain).
-  command -v lark-cli >/dev/null 2>&1 || { echo '{"ok":false,"error":{"type":"missing"}}' > "$CACHE/lark-error.json"; exit 0; }
-  out="$(lark-cli task +get-my-tasks --as user --complete=false --format json 2>&1)"
-  if printf '%s' "$out" | jq -e 'type == "object" and .ok == false' >/dev/null 2>&1 || ! printf '%s' "$out" | jq -e . >/dev/null 2>&1; then
-    printf '%s' "$out" > "$CACHE/lark-error.json"
-    exit 0
-  fi
-  printf '%s' "$out" > "$CACHE/lark-tasks.json.tmp" && mv "$CACHE/lark-tasks.json.tmp" "$CACHE/lark-tasks.json"
-  rm -f "$CACHE/lark-error.json"
-  ag="$(lark-cli calendar +agenda --as user --format json 2>/dev/null)"
-  if printf '%s' "$ag" | jq -e . >/dev/null 2>&1 && ! printf '%s' "$ag" | jq -e 'type == "object" and .ok == false' >/dev/null 2>&1; then
-    printf '%s' "$ag" > "$CACHE/lark-agenda.json.tmp" && mv "$CACHE/lark-agenda.json.tmp" "$CACHE/lark-agenda.json"
-  fi
+accounts() {
+  # Tasks and meetings of every connected service (Todoist, Trello, Jira, Slack, calendars, Lark ...).
+  /usr/bin/python3 "$(dirname "$0")/accounts.py" sync
 }
 
 case "$which" in
-  projects|github|lark)
+  projects|github|accounts)
     ( flock -n 9 || exit 0; "$which" ) 9>"$CACHE/.lock.$which" >/dev/null 2>&1 &
     ;;
 esac

@@ -2,7 +2,7 @@
 # kiln: command-line companion for the Kiln desktop.
 set -uo pipefail
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 SHARE="${KILN_SHARE:-$HOME/.local/share/kiln}"
 CONF="${KILN_CONFIG:-$HOME/.config/kiln}"
 CACHE="${KILN_CACHE:-$HOME/.cache/kiln}"
@@ -32,7 +32,11 @@ Lists
 Setup
   mode [name]              switch the desktop mode: overview | coding | focus | next
   test                     run the tests of the project shown in the work bar
-  settings                 open the Kiln Settings window
+  accounts                 list the connected task and calendar services
+  connect <service>        connect Todoist, Trello, Linear, Asana, Jira, Notion, ClickUp, Slack, a calendar ...
+  disconnect <service>     remove its saved details
+  sync                     refresh the tasks and meetings now
+  settings [page]          open the Kiln Settings window (page: accounts, themes, general ...)
   config                   open ~/.config/kiln/config.json
   doctor                   check dependencies and the installation
   version
@@ -85,6 +89,7 @@ doctor() {
   check "playerctl (Now Playing)"   "command -v playerctl"                   "sudo apt install playerctl"
   check "Pillow (wallpapers)"       "/usr/bin/python3 -c 'import PIL'"       "sudo apt install python3-pil"
   check "GitHub CLI (GitHub card)"  "command -v gh && gh auth status"        "install gh, then: gh auth login"
+  check "python3-dateutil (repeating meetings)" "/usr/bin/python3 -c 'import dateutil'" "sudo apt install python3-dateutil"
   check "lark-cli (Lark card)"      "command -v lark-cli"                    "only needed for the Lark integration"
   echo "Installation"
   check "Kiln files"                "test -f '$SHARE/app.py'"                "run ./install.sh"
@@ -114,6 +119,10 @@ case "$cmd" in
     mkdir -p "$CACHE"
     if [ -z "${1:-}" ]; then cat "$CACHE/mode" 2>/dev/null || echo overview; else echo "mode $1" >> "$CACHE/cmd"; fi ;;
   test) mkdir -p "$CACHE"; echo "test" >> "$CACHE/cmd" ;;
+  accounts) /usr/bin/python3 "$SHARE/accounts.py" list ;;
+  connect|disconnect) [ -n "${1:-}" ] || die "usage: kiln $cmd <service>  (see: kiln accounts)"
+    /usr/bin/python3 "$SHARE/accounts.py" "$cmd" "$@" ;;
+  sync) /usr/bin/python3 "$SHARE/accounts.py" sync ;;
   settings) setsid /usr/bin/python3 "$SHARE/settings.py" "$@" >/dev/null 2>&1 & ;;
   config)  [ -f "$CONF/config.json" ] || die "no config yet, run ./install.sh"; xdg-open "$CONF/config.json" >/dev/null 2>&1 & ;;
   doctor)  doctor ;;

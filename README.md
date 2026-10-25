@@ -9,19 +9,26 @@ and a lock screen that is actually useful, all in eight paper-cut themes.**
 
 </div>
 
-<!-- Add docs/screenshots/desktop.png and lockscreen.png, then uncomment:
-![Kiln Dark desktop](docs/screenshots/desktop.png)
-![Kiln lock screen](docs/screenshots/lockscreen.png)
--->
+![Overview, Coding and Focus mode](docs/screenshots/tour.gif)
+
+<details>
+<summary>Screenshots (3440 × 1440, made-up data)</summary>
+
+![Overview](docs/screenshots/desktop.png)
+![Coding mode](docs/screenshots/coding.png)
+![Focus mode](docs/screenshots/focus.png)
+![Accounts](docs/screenshots/accounts.png)
+
+</details>
 
 ## What you get
 
 | | |
 |---|---|
-| **Today** | Your own todo list, plus a tab for the project you are working on. That tab also shows the tasks of your latest Claude Code session there. Lark tasks show up too, if you use Lark. |
+| **Today** | Your own todo list, plus a tab for the project you are working on. That tab also shows the tasks of your latest Claude Code session there. Tasks from Todoist, Trello, Linear, Asana, Jira, Notion, ClickUp, Slack and Lark show up too once you [connect them](docs/ACCOUNTS.md). |
 | **GitHub** | Notifications, your open pull requests with CI status, review requests and a 6-month contribution heatmap (through the `gh` CLI). |
 | **Projects** | Your most recently touched git repositories, with language and uncommitted-change badges. |
-| **Agenda** | Today's meetings from Lark Calendar (optional). |
+| **Agenda** | Today's meetings from Google, Outlook or Apple Calendar (any iCal link) or Lark, with a Join button for video calls. |
 | **Terminal** | A real terminal on the desktop: tabs, split panes (Ctrl+Shift+E / O), the current git branch, and new tabs that open in the project you are working on. The buttons under it come from the project's own files (`package.json` scripts, Makefile, `manage.py`, Cargo, Go, Flutter...). |
 | **Focus** | A Pomodoro timer (25 / 5 min; scroll to change the length) that counts today's sessions. |
 | **Now Playing** | Any MPRIS player (Spotify, YouTube Music in a browser…), with artwork, seek bar and controls. |
@@ -42,6 +49,7 @@ and a lock screen that is actually useful, all in eight paper-cut themes.**
 * Optional:
   * [GitHub CLI](https://cli.github.com/) for the GitHub card and the PR/CI status.
   * [`lark-cli`](https://github.com/larksuite/cli) for Lark tasks and calendar.
+  * `python3-dateutil`, for recurring events in a connected calendar.
   * Claude Code, for the project task view.
 
 ## Install
@@ -79,7 +87,8 @@ first install.
   for it, and choose what a theme may change outside Kiln.
 * **General**: desktop name, 12/24-hour clock, web search engine.
 * **Projects & files**: folders searched for projects, folders to skip, the folder shown as desktop icons.
-* **Integrations**: GitHub, Lark, Claude Code (and its todo hook), YouTube-Music-only Now Playing.
+* **Accounts**: connect Todoist, Trello, Linear, Asana, Jira, Notion, ClickUp, Slack, calendars and Lark.
+* **Integrations**: GitHub, Claude Code (and its todo hook), YouTube-Music-only Now Playing.
 * **Lock screen & prayer**: widgets on or off, wallpaper brightness and blur, prayer times by city,
   calculation method and language.
 * **Health check**: the same check as `kiln doctor`, plus the log.
@@ -94,7 +103,7 @@ Changes are saved the moment you make them. Press **Restart Kiln** to load them 
 | **Super+J** | switch mode: Overview, Coding, Focus |
 | **Super+D** | show the desktop, Ubuntu's shortcut (the widgets stay visible) |
 | Ctrl+Shift+E / O / W | in the terminal: split right / split down / close the pane |
-| Click the GitHub logo | refresh GitHub, projects and Lark now |
+| Click the GitHub logo | refresh GitHub, projects and your accounts now |
 | Right-click anything | contextual actions (open in VS Code, copy path, stop server, hide…) |
 
 The `kiln` command:
@@ -131,7 +140,7 @@ kiln config                open config.json     kiln doctor         check the in
 ## Privacy
 
 Everything runs locally. Kiln has no account and no telemetry. GitHub data comes from your own
-`gh` login, and Lark data from your own `lark-cli` login. The lock screen shows counts only
+`gh` login, and the tasks and meetings of the accounts you connect (saved only on this computer, see [ACCOUNTS.md](docs/ACCOUNTS.md)). The lock screen shows counts only
 (for example "3 tasks left"), never task or meeting titles. Prayer times are calculated on your
 machine.
 

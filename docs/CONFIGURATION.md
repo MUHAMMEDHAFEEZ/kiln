@@ -106,7 +106,7 @@ projects whose tests are safe to run on this machine.
 | Key | Default | Needs |
 |---|---|---|
 | `integrations.github` | `true` | [`gh`](https://cli.github.com/) logged in (`gh auth login`) |
-| `integrations.lark` | `false` | [`lark-cli`](https://github.com/larksuite/cli), set up and logged in (`lark-cli auth login --domain task,calendar`) |
+| `integrations.lark` | `false` | [`lark-cli`](https://github.com/larksuite/cli), set up and logged in. Turn it on from Settings → Accounts. Every other service is connected there too, see [ACCOUNTS.md](ACCOUNTS.md). |
 | `integrations.claude_code` | `true` | Claude Code. It reads `~/.claude/projects` to show each project's latest tasks. |
 
 **Claude Code can also read your project todos.** For that, run `./install.sh --claude-hook`
@@ -129,6 +129,7 @@ colours. The keys below control the rest of the system.
 
 | File | What it is |
 |---|---|
+| `accounts.json` | The details of your connected accounts, readable only by you ([ACCOUNTS.md](ACCOUNTS.md)) |
 | `todo.txt` | Your personal list (`[ ] item` / `[x] item`, one per line) |
 | `project-todos/<repo>.txt` | Each project's list (`kiln tasks`) |
 | `quick-commands.txt` | Buttons under the desktop terminal |

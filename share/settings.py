@@ -3,6 +3,7 @@
 
     settings.py             open the settings
     settings.py --welcome   open it on the first page with a short introduction
+    settings.py accounts    open it on one page (themes, general, projects, accounts, integrations, lock, health)
 
 Every change is written to ~/.config/kiln/config.json right away. "Restart Kiln" makes the
 desktop widgets pick it up (the top bar re-reads it at the next login, the lock screen the
@@ -24,6 +25,7 @@ HOME = os.path.expanduser("~")
 SHARE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SHARE)
 import theme as T  # noqa: E402  (the theme engine: themes, wallpapers, applying)
+import accounts as AC  # noqa: E402  (task and calendar services)
 
 CONF = T.APP
 CONFIG = f"{CONF}/config.json"
@@ -71,6 +73,10 @@ flowboxchild:selected .kiln-card { border-color: @theme_selected_bg_color; backg
 flowboxchild, flowboxchild:selected { background: transparent; outline: none; }
 .kiln-pill { border-radius: 99px; padding: 2px 10px; background: alpha(@theme_selected_bg_color, 0.2); }
 .kiln-mono { font-family: monospace; font-size: 12px; }
+.kiln-ok { color: #3f9d5b; }
+.kiln-bad { color: #d4503a; }
+.kiln-svc { border-radius: 14px; padding: 12px 14px; background: alpha(@theme_fg_color, 0.05); }
+.kiln-dot { border-radius: 99px; min-width: 12px; min-height: 12px; }
 """
 
 
@@ -162,6 +168,7 @@ class Settings(Gtk.Window):
         self.page("themes", "Appearance", self.build_themes())
         self.page("general", "General", self.build_general())
         self.page("projects", "Projects & files", self.build_projects())
+        self.page("accounts", "Accounts", self.build_accounts())
         self.page("integrations", "Integrations", self.build_integrations())
         self.page("lock", "Lock screen & prayer", self.build_lock())
         self.page("health", "Health check", self.build_health())
@@ -549,6 +556,175 @@ class Settings(Gtk.Window):
             self.set("desktop_dir", p)
             self.desk_lbl.set_text(p)
 
+    # ------------------------------------------------------------ accounts
+    def build_accounts(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.pack_start(label("Connect the services you use. Their tasks appear in the Today card and their "
+                             "meetings in Agenda. What you type here stays on this computer, in "
+                             "~/.config/kiln/accounts.json, a file only you can read.", "kiln-sub", wrap=True),
+                       False, False, 0)
+        self.acct_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.pack_start(self.acct_box, False, False, 0)
+        self.fill_accounts()
+        return box
+
+    def fill_accounts(self):
+        for c in self.acct_box.get_children():
+            self.acct_box.remove(c)
+        on = AC.connected()
+        cache = AC.read_cache().get("services", {})
+        for sid, svc in AC.SERVICES.items():
+            row = Gtk.Box(spacing=12)
+            row.get_style_context().add_class("kiln-svc")
+            dot = Gtk.DrawingArea()
+            dot.set_size_request(12, 12)
+            dot.set_valign(Gtk.Align.CENTER)
+            col = Gdk.RGBA()
+            col.parse("#" + svc.color)
+            dot.connect("draw", lambda w, cr, c=col: (cr.set_source_rgba(c.red, c.green, c.blue, 1),
+                                                      cr.arc(6, 6, 6, 0, 6.2832), cr.fill(), False)[-1])
+            row.pack_start(dot, False, False, 0)
+            mid = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            kinds = " and ".join({"tasks": "tasks", "events": "meetings"}[k] for k in svc.kinds)
+            title = label(svc.name)
+            title.set_markup(f"<b>{GLib.markup_escape_text(svc.name)}</b>  <small>{kinds}</small>")
+            mid.pack_start(title, False, False, 0)
+            c = cache.get(sid) or {}
+            if sid in on:
+                if c.get("error"):
+                    status, css = c["error"], "kiln-bad"
+                elif c:
+                    bits = ([f"{len(c.get('tasks', []))} tasks"] if "tasks" in svc.kinds else []) + \
+                           ([f"{len(c.get('events', []))} meetings"] if "events" in svc.kinds else [])
+                    status, css = "Connected · " + " · ".join(bits), "kiln-ok"
+                else:
+                    status, css = "Connected · loading…", "kiln-ok"
+            else:
+                status, css = svc.tagline, "kiln-sub"
+            mid.pack_start(label(status, css, wrap=True), False, False, 0)
+            row.pack_start(mid, True, True, 0)
+            if sid in on:
+                off = Gtk.Button(label="Disconnect")
+                off.connect("clicked", lambda _b, i=sid: self.disconnect_account(i))
+                row.pack_end(off, False, False, 0)
+            btn = Gtk.Button(label="Edit" if sid in on and not svc.cli else "Connect" if sid not in on else "Check")
+            btn.connect("clicked", lambda _b, i=sid: self.connect_dialog(i))
+            row.pack_end(btn, False, False, 0)
+            self.acct_box.pack_start(row, False, False, 0)
+        more = label("Missing a service? Each one is a small class in share/accounts.py (see docs/ACCOUNTS.md).",
+                     "kiln-sub", wrap=True)
+        self.acct_box.pack_start(more, False, False, 6)
+        self.acct_box.show_all()
+
+    def sync_accounts(self, then=None):
+        def work():
+            run_quiet("/usr/bin/python3", f"{SHARE}/accounts.py", "sync", timeout=60)
+            GLib.idle_add(lambda: (self.fill_accounts(), then and then(), False)[-1])
+        threading.Thread(target=work, daemon=True).start()
+
+    def disconnect_account(self, sid):
+        if sid == "lark":
+            self.set("integrations.lark", False)
+        data = AC.load_accounts()
+        if sid in data:
+            data.pop(sid)
+            AC.save_accounts(data)
+        self.sync_accounts()
+        self.fill_accounts()
+
+    def connect_dialog(self, sid):
+        svc = AC.SERVICES[sid]
+        dlg = Gtk.Dialog(title=f"Connect {svc.name}", transient_for=self, modal=True)
+        dlg.set_default_size(520, -1)
+        area = dlg.get_content_area()
+        area.set_spacing(8)
+        for m in ("start", "end", "top", "bottom"):
+            getattr(area, f"set_margin_{m}")(18)
+        head = label("", wrap=True)
+        head.set_markup(f"<b>{GLib.markup_escape_text(svc.name)}</b>  {GLib.markup_escape_text(svc.tagline)}")
+        area.pack_start(head, False, False, 0)
+        steps = "\n".join(f"{i}.  {t}" for i, t in enumerate(svc.steps, 1))
+        area.pack_start(label(steps, "kiln-mono" if svc.cli else "kiln-sub", wrap=True), False, False, 4)
+        if svc.link:
+            link = Gtk.Button(label="Open the page where you find it")
+            link.set_halign(Gtk.Align.START)
+            link.connect("clicked", lambda *_: run_quiet("xdg-open", svc.link))
+            area.pack_start(link, False, False, 0)
+        saved = AC.details(sid)
+        widgets = {}
+        for f in svc.fields:
+            area.pack_start(label(f.label), False, False, 0)
+            if f.multiline:
+                tv = Gtk.TextView(wrap_mode=Gtk.WrapMode.CHAR, top_margin=6, bottom_margin=6, left_margin=6, right_margin=6)
+                tv.get_style_context().add_class("kiln-mono")
+                tv.get_buffer().set_text(saved.get(f.key, ""))
+                frame = Gtk.ScrolledWindow(min_content_height=90, shadow_type=Gtk.ShadowType.IN)
+                frame.add(tv)
+                area.pack_start(frame, False, False, 0)
+                widgets[f.key] = lambda t=tv: t.get_buffer().get_text(t.get_buffer().get_start_iter(),
+                                                                       t.get_buffer().get_end_iter(), False)
+            else:
+                ent = Gtk.Entry(text=saved.get(f.key, ""), activates_default=True)
+                ent.set_visibility(not f.secret)
+                if f.hint:
+                    ent.set_placeholder_text(f.hint)
+                area.pack_start(ent, False, False, 0)
+                widgets[f.key] = ent.get_text
+            if f.hint and f.multiline:
+                area.pack_start(label(f.hint, "kiln-sub", wrap=True), False, False, 0)
+        msg = label("", wrap=True)
+        area.pack_start(msg, False, False, 4)
+        dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        ok = dlg.add_button("Turn on" if svc.cli else "Test and save", Gtk.ResponseType.OK)
+        ok.get_style_context().add_class("suggested-action")
+        dlg.set_default_response(Gtk.ResponseType.OK)
+        busy = {"on": False}
+
+        def show(text, css):
+            for k in ("kiln-ok", "kiln-bad", "kiln-sub"):
+                msg.get_style_context().remove_class(k)
+            msg.get_style_context().add_class(css)
+            msg.set_text(text)
+
+        def on_response(_d, resp):
+            if resp != Gtk.ResponseType.OK:
+                dlg.destroy()
+                return
+            if busy["on"]:
+                return
+            values = {k: g().strip() for k, g in widgets.items()}
+            busy["on"] = True
+            ok.set_sensitive(False)
+            show("Checking…", "kiln-sub")
+
+            def work():
+                try:
+                    AC.test(sid, values) if not svc.cli else svc.check({})
+                    err = None
+                except AC.ServiceError as e:
+                    err = str(e)
+
+                def done():
+                    busy["on"] = False
+                    ok.set_sensitive(True)
+                    if err:
+                        show(err, "kiln-bad")
+                        return False
+                    if svc.cli:
+                        self.set("integrations.lark", True)
+                    else:
+                        data = AC.load_accounts()
+                        data[sid] = values
+                        AC.save_accounts(data)
+                    dlg.destroy()
+                    self.fill_accounts()
+                    self.sync_accounts()
+                    return False
+                GLib.idle_add(done)
+            threading.Thread(target=work, daemon=True).start()
+        dlg.connect("response", on_response)
+        dlg.show_all()
+
     # ------------------------------------------------------------ integrations
     def build_integrations(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -565,10 +741,6 @@ class Settings(Gtk.Window):
         row.pack_start(self.gh_status, False, False, 0)
         box.pack_start(row, False, False, 0)
 
-        lark = "installed" if shutil.which("lark-cli") else "not installed"
-        box.pack_start(self.switch("integrations.lark", "Lark tasks and calendar",
-                                   f"Needs lark-cli (currently {lark}) and: lark-cli auth login --domain task,calendar"),
-                       False, False, 0)
         box.pack_start(self.switch("integrations.claude_code", "Claude Code tasks in the project tab",
                                    "Shows the tasks of your latest Claude Code session in each project."),
                        False, False, 0)
@@ -732,6 +904,10 @@ class Settings(Gtk.Window):
 
 def main():
     win = Settings(welcome="--welcome" in sys.argv)
+    pages = {"themes", "general", "projects", "accounts", "integrations", "lock", "health"}
+    for a in sys.argv[1:]:
+        if a in pages:
+            win.stack.set_visible_child_name(a)
     win.connect("destroy", Gtk.main_quit)
     Gtk.main()
 

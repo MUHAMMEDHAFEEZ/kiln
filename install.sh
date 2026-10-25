@@ -95,29 +95,6 @@ for f in "$R"/config/*; do                       # starter files, never overwrit
 done
 mkdir -p "$CONF/project-todos" "$CONF/wallpapers"
 
-# moving over from the older "Violet Desktop" setup this project grew out of
-OLD="$HOME/.config/violet-desktop"
-if [ -d "$OLD" ] && [ ! -e "$CONF/.migrated" ]; then
-  say "Bringing over your lists and folder looks from $OLD"
-  for f in todo.txt quick-commands.txt project-names.txt icons.txt icon-styles.json running-hide.txt current-project.txt; do
-    [ -f "$OLD/$f" ] && cp "$OLD/$f" "$CONF/$f"
-  done
-  [ -d "$OLD/project-todos" ] && cp -a "$OLD/project-todos/." "$CONF/project-todos/"
-  [ -f "$OLD/current-theme" ] && sed 's/^paper-dark$/kiln-dark/' "$OLD/current-theme" > "$CONF/current-theme"
-  systemctl --user stop violet-desktop 2>/dev/null || true
-  # the old Super+K shortcut would start the old widgets again
-  oldkey="$KEYBASE/violet-search/"
-  list="$(gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings)"
-  list="$(echo "$list" | sed -e "s|, *'$oldkey'||" -e "s|'$oldkey', *||" -e "s|'$oldkey'||")"
-  [ "$list" = "[]" ] && list="@as []"
-  gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "$list"
-  dconf reset -f "$oldkey"
-  gnome-extensions disable violet-panel@local 2>/dev/null || true
-  [ -f "$HOME/.config/autostart/violet-desktop.desktop" ] && \
-    mv "$HOME/.config/autostart/violet-desktop.desktop" "$CONF/.restore/violet-desktop.desktop.old"
-  touch "$CONF/.migrated"
-fi
-
 # ------------------------------------------------------------------ app menu entry + icon
 mkdir -p "$HOME/.local/share/applications" "$HOME/.local/share/icons/hicolor/scalable/apps"
 install -m 644 "$SHARE/desktop/kiln.svg" "$HOME/.local/share/icons/hicolor/scalable/apps/kiln.svg"

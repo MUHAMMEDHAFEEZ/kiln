@@ -40,7 +40,16 @@ UPDATER = f"{SHARE}/update-data.sh"
 sys.path.insert(0, SHARE)
 import iconkit as K  # noqa: E402
 import prayer as PR  # noqa: E402
+import accounts as ACC  # noqa: E402
 FONT = "Ubuntu Sans"
+
+# KILN_DEMO=<file.json> shows made-up projects, servers and programs instead of this computer's (for
+# screenshots and the README; see docs/CONTRIBUTING.md). Without it nothing here is used.
+try:
+    with open(os.environ["KILN_DEMO"], encoding="utf-8") as _f:
+        DEMO = json.load(_f)
+except (KeyError, OSError, ValueError):
+    DEMO = None
 
 # ---- settings (~/.config/kiln/config.json, documented in docs/CONFIGURATION.md)
 DEFAULT_CONFIG = {
@@ -759,7 +768,7 @@ def test_command(path):
 WORK = dict(proj=None)      # the project the bottom bar is showing (set by WorkBar)
 
 
-# ----------------------------------------------------------------- work data (GitHub json, Lark)
+# ----------------------------------------------------------------- work data (GitHub json, connected accounts)
 def load_json(path):
     try:
         with open(path, encoding="utf-8") as f:
@@ -798,80 +807,60 @@ def _ts(v):
         return None
 
 
-LARK_DONE_FILE = f"{CACHE}/lark-done.json"
-LARK_BIN = f"{HOME}/.local/bin/lark-cli"
+ACCT_DONE_FILE = f"{CACHE}/accounts-done.json"
 
 
-def lark_state():
-    """('ok' | 'setup' | 'login' | 'missing' | 'pending' | 'off', hint)"""
-    if not INTEGRATIONS.get("lark"):
-        return "off", ""
-    err = load_json(f"{CACHE}/lark-error.json")
-    if isinstance(err, dict):
-        e = err.get("error") or {}
-        if e.get("type") == "missing":
-            return "missing", "lark-cli is not installed"
-        if e.get("subtype") == "not_configured" or e.get("type") == "config":
-            return "setup", "lark-cli config init --new --brand lark"
-        return "login", "lark-cli auth login --domain task,calendar"
-    if load_json(f"{CACHE}/lark-tasks.json") is None:
+def accounts_data():
+    """{service id: {ok, error, tasks, events}} as last synced (see accounts.py)."""
+    return ACC.read_cache().get("services", {})
+
+
+def accounts_state(kind):
+    """('none', '') nothing connected for `kind`, ('pending', '') not synced yet, ('error', text), ('ok', '')"""
+    ids = [i for i in ACC.connected() if kind in ACC.SERVICES[i].kinds]
+    if not ids:
+        return "none", ""
+    data = accounts_data()
+    have = [data[i] for i in ids if i in data]
+    if not have:
         return "pending", ""
+    if all(not d.get("ok") for d in have):
+        return "error", next((d.get("error") for d in have if d.get("error")), "")
     return "ok", ""
 
 
-def load_lark_done():
-    d = load_json(LARK_DONE_FILE) or {}
+def load_acct_done():
+    d = load_json(ACCT_DONE_FILE) or {}
     if d.get("date") != time.strftime("%Y-%m-%d"):
         return {}
     return d.get("done", {})
 
 
-def save_lark_done(done):
+def save_acct_done(done):
     try:
-        with open(LARK_DONE_FILE, "w", encoding="utf-8") as f:
+        with open(ACCT_DONE_FILE, "w", encoding="utf-8") as f:
             json.dump({"date": time.strftime("%Y-%m-%d"), "done": done}, f)
     except OSError:
         pass
 
 
-def load_lark_tasks():
-    out, seen = [], set()
-    if not INTEGRATIONS.get("lark"):
-        return out
-    for d in _walk(load_json(f"{CACHE}/lark-tasks.json")):
-        guid = d.get("guid") or d.get("task_guid")
-        title = d.get("summary") or d.get("title")
-        if not guid or not isinstance(title, str) or guid in seen:
+def load_account_tasks():
+    out = []
+    for sid, c in accounts_data().items():
+        if sid not in ACC.SERVICES:
             continue
-        if _ts(d.get("completed_at")):
-            continue
-        seen.add(guid)
-        url = d.get("url") or d.get("applink") or d.get("app_link") or ""
-        out.append(dict(key="lark:" + guid, guid=guid, text=title.strip() or "(untitled)",
-                        due=_ts(d.get("due") or d.get("due_time") or d.get("due_at")),
-                        url=url if isinstance(url, str) else "", source="lark", done=False))
+        for t in c.get("tasks") or []:
+            out.append(dict(key=f"{sid}:{t['id']}", guid=t["id"], service=sid, text=t["title"], due=t.get("due"),
+                            url=t.get("url", ""), detail=t.get("detail", ""), source="account", done=False))
     return out
 
 
-def load_lark_events():
-    out, seen = [], set()
-    for d in _walk(load_json(f"{CACHE}/lark-agenda.json")):
-        title = d.get("summary") or d.get("title")
-        start = d.get("start_time") or d.get("start")
-        if not isinstance(title, str) or start is None:
-            continue
-        s = _ts(start)
-        if not s or d.get("status") == "cancelled":
-            continue
-        e = _ts(d.get("end_time") or d.get("end")) or s + 1800
-        eid = d.get("event_id") or (title, s)
-        if eid in seen:
-            continue
-        seen.add(eid)
-        vchat = d.get("vchat") if isinstance(d.get("vchat"), dict) else {}
-        url = vchat.get("meeting_url") or d.get("meeting_url") or d.get("app_link") or d.get("applink") or ""
-        out.append(dict(title=title.strip() or "(no title)", start=s, end=e, url=url if isinstance(url, str) else ""))
-    out.sort(key=lambda ev: ev["start"])
+def load_account_events():
+    out = []
+    for sid, c in accounts_data().items():
+        if sid in ACC.SERVICES:
+            out += [dict(e, service=sid) for e in c.get("events") or []]
+    out.sort(key=lambda e: e["start"])
     return out
 
 
@@ -900,12 +889,12 @@ def load_gh():
                 rev_count=reviews.get("issueCount", len(revs)), weeks=days)
 
 
-def due_label(ts):
+def due_label(ts, clock=True):
     """(text, colour) for a due timestamp."""
     lt = time.localtime(ts)
     d = datetime.date(lt.tm_year, lt.tm_mon, lt.tm_mday)
     today = datetime.date.today()
-    hm = "" if (lt.tm_hour, lt.tm_min) in ((0, 0), (23, 59)) else time.strftime(" " + HMP, lt)
+    hm = "" if not clock or (lt.tm_hour, lt.tm_min) in ((0, 0), (23, 59)) else time.strftime(" " + HMP, lt)
     if d < today:
         return "Overdue", C["red"]
     if d == today:
@@ -1003,8 +992,8 @@ class Cards(Gtk.Overlay):
         self.proj_off = self.todo_off = 0
         self._n_proj = self._n_todo = 0
         self.items = {}
-        self.lark_done = load_lark_done()
-        self.today_tab = "today"           # "today" (personal + Lark) or "project" (WORK["proj"])
+        self.acct_done = load_acct_done()
+        self.today_tab = "today"           # "today" (personal + connected accounts) or "project" (WORK["proj"])
         self.jobs = []                     # (Popen, guid, text)
 
     # --- metrics history (called from the 2 s tick)
@@ -1022,9 +1011,9 @@ class Cards(Gtk.Overlay):
                 continue
             self.jobs.remove(job)
             if rc != 0:                        # completion failed: undo the optimistic tick
-                self.lark_done.pop(guid, None)
-                save_lark_done(self.lark_done)
-            refresh("lark")
+                self.acct_done.pop(guid, None)
+                save_acct_done(self.acct_done)
+            refresh("accounts")
 
     # --- hit regions
     def region(self, cr, box, key, r=10, hl=True):
@@ -1056,35 +1045,32 @@ class Cards(Gtk.Overlay):
             self.area.queue_draw()
 
     # --- actions
-    def complete_lark(self, it):
-        if it["guid"] in self.lark_done:
+    def complete_task(self, it):
+        if it["key"] in self.acct_done:
             return
-        self.lark_done[it["guid"]] = it["text"]
-        save_lark_done(self.lark_done)
+        self.acct_done[it["key"]] = it["text"]
+        save_acct_done(self.acct_done)
         try:
-            p = subprocess.Popen([LARK_BIN, "task", "+complete", "--as", "user", "--task-id", it["guid"]],
+            p = subprocess.Popen(["/usr/bin/python3", f"{SHARE}/accounts.py", "complete", it["service"], it["guid"]],
                                  env=clean_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            self.jobs.append((p, it["guid"], it["text"]))
+            self.jobs.append((p, it["key"], it["text"]))
         except OSError:
-            self.lark_done.pop(it["guid"], None)
+            self.acct_done.pop(it["key"], None)
 
     def toggle_item(self, key):
         it = self.items.get(key)
         if not it:
             return
-        if it["source"] == "lark":
+        if it["source"] == "account":
             if not it["done"]:
-                self.complete_lark(it)
+                self.complete_task(it)
         elif it["source"] == "project":
             todo_toggle(it["idx"], it["file"])
         elif it["source"] == "local":
             todo_toggle(it["idx"])
 
-    def lark_setup_cmd(self):
-        st, hint = lark_state()
-        if st == "setup":
-            return "lark-cli config init --new --brand lark"
-        return "lark-cli auth login --domain task,calendar"
+    def open_accounts(self):
+        run(["/usr/bin/python3", f"{SHARE}/settings.py", "accounts"])
 
     def on_press(self, _w, ev):
         key = self.hit_at(ev.x, ev.y)
@@ -1104,14 +1090,14 @@ class Cards(Gtk.Overlay):
             self.toggle_item(key[1])
         elif kind == "task_row":
             it = self.items.get(key[1])
-            if it and it["source"] == "lark" and it.get("url"):
+            if it and it["source"] == "account" and it.get("url"):
                 open_url(it["url"])
         elif kind == "add":
             self.show_entry()
         elif kind == "tab":
             self.today_tab, self.todo_off = key[1], 0
-        elif kind == "lark_connect":
-            self.terminal.run_command(self.lark_setup_cmd())
+        elif kind == "acct_connect":
+            self.open_accounts()
         elif kind == "event":
             if key[2]:
                 open_url(key[2])
@@ -1130,7 +1116,7 @@ class Cards(Gtk.Overlay):
         elif kind == "gh_logo":
             refresh("github")
             refresh("projects")
-            refresh("lark")
+            refresh("accounts")
         elif kind == "pr":
             open_url(key[1])
         self.area.queue_draw()
@@ -1174,10 +1160,11 @@ class Cards(Gtk.Overlay):
                     (None, None),
                     ("Delete", lambda: (todo_delete(idx, f), self.area.queue_draw())),
                 ])
-            elif it["source"] == "lark":
-                items = [("Open in Lark", lambda: open_url(it["url"]))] if it.get("url") else []
+            elif it["source"] == "account":
+                name = ACC.SERVICES[it["service"]].name
+                items = [(f"Open in {name}", lambda: open_url(it["url"]))] if it.get("url") else []
                 if not it["done"]:
-                    items.append(("Mark complete in Lark", lambda: (self.complete_lark(it), self.area.queue_draw())))
+                    items.append((f"Mark complete in {name}", lambda: (self.complete_task(it), self.area.queue_draw())))
                 items += [(None, None), ("Copy title", lambda: copy_text(it["text"]))]
                 popup_menu(ev, items)
             else:
@@ -1335,7 +1322,7 @@ class Cards(Gtk.Overlay):
             text(cr, f"Week {iso[1]} · day {today.timetuple().tm_yday}", x + 190, y + 68, 13, C["text"],
                  maxw=right - x - 190)
 
-    # 2) today: Lark tasks + local tasks
+    # 2) today: tasks of the connected accounts + local tasks
     def today_tabs(self, cr, x, y):
         """Header of the Today card: `Today` and, when known, the current project as a tab."""
         glyph(cr, "check-circle", x + 20, y + 16, 22, C["acc2"])
@@ -1412,13 +1399,14 @@ class Cards(Gtk.Overlay):
                 cr.arc(x + 30, cy, 8.4, 0, 2 * math.pi)
                 cr.stroke()
             right = x + w - 22
-            if it["source"] == "lark":
-                right -= pill(cr, right, cy + 4, "Lark", 10.5, tone("5b8cff"), align="r") + 6
+            if it["source"] == "account":
+                svc = ACC.SERVICES[it["service"]]
+                right -= pill(cr, right, cy + 4, svc.name, 10.5, tone(svc.color), align="r") + 6
             elif claude:
                 right -= pill(cr, right, cy + 4, "now" if it.get("running") else "Claude", 10.5,
                               C["amber"] if it.get("running") else C["acc2"], align="r") + 6
             if it.get("due") and not it["done"]:
-                lbl, col = due_label(it["due"])
+                lbl, col = due_label(it["due"], clock=it["source"] != "account")   # the service pill needs the room
                 right -= pill(cr, right, cy + 4, lbl, 10.5, col, align="r") + 6
             text(cr, it["text"], x + 50, cy + 5, 14, C["dim"] if it["done"] else C["text"],
                  maxw=right - (x + 50) - 4, strike=it["done"], alpha=0.8 if it["done"] else 1)
@@ -1432,14 +1420,15 @@ class Cards(Gtk.Overlay):
         x, y, w, h = self.card(cr, "today")
         local = [dict(key=f"local:{i['idx']}", idx=i["idx"], text=i["text"], done=i["done"], due=None,
                       source="local", url="") for i in todo_items()]
-        lark = load_lark_tasks()
-        open_guids = {t["guid"] for t in lark}
-        for t in lark:
-            if t["guid"] in self.lark_done:
+        remote = load_account_tasks()
+        open_keys = {t["key"] for t in remote}
+        for t in remote:
+            if t["key"] in self.acct_done:
                 t["done"] = True
-        lark_done_gone = [dict(key=f"lark:{g}", guid=g, text=txt, done=True, due=None, source="lark", url="")
-                          for g, txt in self.lark_done.items() if g not in open_guids]
-        allitems = lark + local + lark_done_gone
+        remote_done_gone = [dict(key=k, guid=k.split(":", 1)[1], service=k.split(":", 1)[0], text=txt, done=True,
+                                 due=None, source="account", url="")
+                            for k, txt in self.acct_done.items() if k not in open_keys and k.split(":")[0] in ACC.SERVICES]
+        allitems = remote + local + remote_done_gone
         opened = sorted([t for t in allitems if not t["done"]], key=lambda t: (t["due"] is None, t["due"] or 0))
         done = [t for t in allitems if t["done"]]
         items = opened + done
@@ -1450,9 +1439,17 @@ class Cards(Gtk.Overlay):
         total = len(items)
         text(cr, f"{len(done)} of {total} done" if total else "no tasks", x + w - 22, y + 33, 12.5, C["dim"], align="r")
         ay = self.add_button(cr, x, y, w, h)
-        n_lark = len([t for t in items if t["source"] == "lark" and not t["done"]])
-        if n_lark:
-            text(cr, f"{n_lark} from Lark", x + w - 22, ay, 11.5, C["dim"], align="r")
+        counts = {}
+        for t in items:
+            if t["source"] == "account" and not t["done"]:
+                counts[t["service"]] = counts.get(t["service"], 0) + 1
+        if counts:
+            text(cr, " · ".join(f"{n} {ACC.SERVICES[k].name}" for k, n in counts.items()), x + w - 22, ay, 11.5,
+                 C["dim"], align="r", maxw=w - 140)
+        elif not [i for i in ACC.connected() if "tasks" in ACC.SERVICES[i].kinds]:
+            self.region(cr, (x + w - 190, ay - 18, 176, 24), ("acct_connect",), r=12)
+            text(cr, "Connect your task apps", x + w - 22, ay, 11.5,
+                 C["acc"] if self.hover == ("acct_connect",) else C["dim"], align="r")
         self.progress(cr, x, y, w, len(done), total)
         if not items:
             text(cr, "All clear.", x + 24, y + 104, 15, C["text"])
@@ -1499,41 +1496,30 @@ class Cards(Gtk.Overlay):
             return
         self.task_rows(cr, x, y, w, h, items)
 
-    # 3) agenda (Lark calendar)
+    # 3) agenda (meetings from every connected calendar)
     def card_agenda(self, cr):
         x, y, w, h = self.card(cr, "agenda")
         self.header(cr, x, y, "calendar", C["blue"], "Agenda")
-        st, hint = lark_state()
+        st, err = accounts_state("events")
         if st != "ok":
-            if st == "off":
+            if st == "none":
                 text(cr, "No calendar connected", x + 22, y + 76, 13.5, C["text"])
-                text(cr, "Turn on the Lark integration in", x + 22, y + 100, 12.5, C["dim"])
-                text(cr, "~/.config/kiln/config.json", x + 22, y + 120, 12.5, C["dim"], mono=True)
-                return
-            msg = {"missing": "Install lark-cli to see meetings",
-                   "setup": "Connect Lark to see tasks & meetings",
-                   "login": "Sign in to Lark to see tasks & meetings",
-                   "pending": "Loading Lark…"}[st]
-            text(cr, msg, x + 22, y + 76, 13.5, C["text"])
-            if st in ("setup", "login"):
-                self.region(cr, (x + 14, y + 92, w - 28, 40), ("lark_connect",), r=12)
-                rrect(cr, x + 20, y + 98, w - 40, 30, 10)
-                set_rgba(cr, C["acc"], 1 if self.hover == ("lark_connect",) else 0.9)
-                cr.fill()
-                cr.set_line_width(1.6)
-                cr.set_line_cap(cairo.LINE_CAP_ROUND)
-                set_rgba(cr, C["on_acc"], 1)
-                cr.move_to(x + 31, y + 107)
-                cr.line_to(x + 36, y + 113)
-                cr.line_to(x + 31, y + 119)
-                cr.move_to(x + 39, y + 119)
-                cr.line_to(x + 46, y + 119)
-                cr.stroke()
-                text(cr, self.lark_setup_cmd(), x + 54, y + 118, 11.5, C["on_acc"], maxw=w - 80, mono=True)
-                text(cr, "click to run it in the terminal below", x + 22, y + 150, 11.5, C["dim"])
+                text(cr, "Google, Outlook, Apple or Lark", x + 22, y + 98, 12.5, C["dim"])
+            else:
+                text(cr, "Loading meetings…" if st == "pending" else "Could not load meetings", x + 22, y + 76, 13.5,
+                     C["text"])
+                if err:
+                    text(cr, err, x + 22, y + 98, 12, C["dim"], maxw=w - 44)
+            self.region(cr, (x + 14, y + 112, w - 28, 40), ("acct_connect",), r=12)
+            rrect(cr, x + 20, y + 118, w - 40, 30, 10)
+            set_rgba(cr, C["acc"], 1 if self.hover == ("acct_connect",) else 0.9)
+            cr.fill()
+            text(cr, "Connect a calendar" if st == "none" else "Open account settings", x + w / 2, y + 138, 13,
+                 C["on_acc"], bold=True, align="c")
             return
         now = time.time()
-        events = [e for e in load_lark_events() if e["end"] > now]
+        night = time.mktime((datetime.date.today() + datetime.timedelta(days=1)).timetuple())
+        events = [e for e in load_account_events() if e["end"] > now and e["start"] < night]
         text(cr, f"{len(events)} left today" if events else "", x + w - 22, y + 33, 12.5, C["dim"], align="r")
         if not events:
             text(cr, "No more meetings today", x + 22, y + 80, 13.5, C["dim"])
@@ -1744,7 +1730,7 @@ class TerminalCard(Gtk.Box):
                                 "git status", "git pull", "npm run dev", "docker ps", "code ."])
         self.new_tab(os.path.expanduser("~/Desktop"))
         GLib.timeout_add_seconds(1, self.poll_cwd)
-        self._first_dir = True
+        self._first_dir = not DEMO       # (a demo already starts in its project)
 
     def _area(self, h, draw, press, motion):
         a = Gtk.DrawingArea()
@@ -3647,6 +3633,9 @@ class NowPlaying(Gtk.DrawingArea):
         # loop must never wait for it (that froze every widget window)
         if getattr(self, "_polling", False):
             return True
+        if DEMO:
+            self._parse("")
+            return True
         try:
             proc = Gio.Subprocess.new(["playerctl", "-a", "metadata", "--format", self.FMT],
                                       Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE)
@@ -3981,6 +3970,8 @@ def running_hidden():
 
 def scan_dev():
     """Listening TCP ports owned by this user (+ well-known local services) and Docker containers."""
+    if DEMO:
+        return DEMO.get("servers", []), DEMO.get("containers")
     servers = {}
     hidden = running_hidden()
     try:
@@ -4166,6 +4157,9 @@ def open_projects(last_active):
     in a repo, running dev servers. Newest activity first. `last_active` (path -> time) is kept
     by the caller so a window that was focused a minute ago still ranks above an idle one."""
     now = time.time()
+    if DEMO:
+        return [dict(path=p, name=os.path.basename(p), sources={"vscode"}, t=now - 60 * i)
+                for i, p in enumerate(DEMO.get("projects", []))]
     found = {}
 
     def add(path, src, t=0):
@@ -5199,7 +5193,7 @@ class SysSampler:
             except (OSError, ValueError, IndexError, subprocess.SubprocessError):
                 n["gpu"] = None
         if self._n % 2 == 0:
-            n["procs"] = self._top()
+            n["procs"] = [tuple(p) for p in DEMO["top"]] if DEMO and DEMO.get("top") else self._top()
         if n["gpu"] is not None:
             self._push("gpu", n["gpu"])
         self._n += 1
@@ -6084,10 +6078,10 @@ def main():
     # data refresh schedule
     refresh("projects")
     refresh("github")
-    refresh("lark")
+    refresh("accounts")
     GLib.timeout_add_seconds(120, lambda: (refresh("projects"), True)[1])
     GLib.timeout_add_seconds(300, lambda: (refresh("github"), True)[1])
-    GLib.timeout_add_seconds(120, lambda: (refresh("lark"), True)[1])
+    GLib.timeout_add_seconds(120, lambda: (refresh("accounts"), True)[1])
 
     def tick():
         cards.metrics.sample()

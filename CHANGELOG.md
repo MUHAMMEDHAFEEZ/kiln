@@ -1,7 +1,15 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 (2026-10-25)
 
+* **Accounts**: connect Todoist, Trello, Linear, Asana, Jira, Notion, ClickUp, Slack, any iCal calendar
+  (Google, Outlook, Apple) and Lark from Settings → Accounts or `kiln connect`. Their tasks appear in Today and
+  their meetings in Agenda, and tasks can be ticked off from Kiln. Details are kept in a private file
+  (see `docs/ACCOUNTS.md`).
+* Agenda is no longer Lark-only, and shows a clear way to connect a calendar.
+* Demo mode and screenshots tool (`tools/demo.py`), tests (`python3 -m unittest discover -s tests`),
+  README screenshots and a tour GIF.
+* The installer no longer carries the migration from the project's earlier name.
 * Terminal: split panes, new tabs open in the current project, and the buttons under it come from the
   project's own files.
 * Work bar: a tests button (run, result, output), and Overview / Coding / Focus modes with

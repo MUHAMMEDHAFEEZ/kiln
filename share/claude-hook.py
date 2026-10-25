@@ -43,7 +43,7 @@ def strip(data):
         # ours: kiln's script, or the script of the "Violet Desktop" setup Kiln grew out of
         g["hooks"] = [h for h in g.get("hooks", [])
                       if MARK not in h.get("command", "")
-                      or not any(k in h.get("command", "") for k in ("kiln", "violet-desktop"))]
+                      or not any(k in h.get("command", "") for k in ("kiln",))]
         if g["hooks"]:
             kept.append(g)
     if "hooks" in data:
