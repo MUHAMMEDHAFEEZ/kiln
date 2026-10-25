@@ -18,6 +18,7 @@ and a lock screen that is actually useful, all in eight paper-cut themes.**
 ![Coding mode](docs/screenshots/coding.png)
 ![Focus mode](docs/screenshots/focus.png)
 ![Accounts](docs/screenshots/accounts.png)
+![Lock screen](docs/screenshots/lockscreen.png)
 
 </details>
 
