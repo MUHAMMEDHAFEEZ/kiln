@@ -1,4 +1,5 @@
 """Tests for share/update.py against a local stand-in for GitHub (nothing is installed, nothing leaves the machine).
+Releases are signed with throwaway keys made here, the way the real ones are signed with `ssh-keygen -Y sign`.
 
     python3 -m unittest discover -s tests
 """
@@ -6,6 +7,8 @@ import http.server
 import io
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -14,6 +17,8 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "share"))
 import update as U  # noqa: E402
+
+ORIGINALS = {n: getattr(U, n) for n in ("apply", "rollback", "restart", "notify", "healthy")}
 
 
 def release_tar(version, extra=None, top="kiln-abc123", drop=()):
@@ -31,9 +36,27 @@ def release_tar(version, extra=None, top="kiln-abc123", drop=()):
     return buf.getvalue()
 
 
+def make_key(folder, name):
+    path = f"{folder}/{name}"
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "test", "-f", path], check=True)
+    with open(path + ".pub", encoding="utf-8") as f:
+        return path, f.read().strip()
+
+
+def sign(key, data, folder):
+    path = f"{folder}/to-sign.bin"
+    with open(path, "wb") as f:
+        f.write(data)
+    subprocess.run(["ssh-keygen", "-Y", "sign", "-q", "-f", key, "-n", U.SIG_NAMESPACE, path], check=True)
+    with open(path + ".sig", "rb") as f:
+        out = f.read()
+    os.remove(path + ".sig")
+    return out
+
+
 class Fake(http.server.BaseHTTPRequestHandler):
     release = {}
-    tar = b""
+    blobs = {}
 
     def log_message(self, *_):
         pass
@@ -41,8 +64,12 @@ class Fake(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.endswith("/releases/latest"):
             body = json.dumps(Fake.release).encode()
-        elif "/tarball/" in self.path:
-            body = Fake.tar
+        elif "/releases/assets/" in self.path:
+            body = Fake.blobs.get(self.path.rsplit("/", 1)[1])
+            if body is None:
+                self.send_response(404)
+                self.end_headers()
+                return
         else:
             self.send_response(404)
             self.end_headers()
@@ -53,6 +80,7 @@ class Fake(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+@unittest.skipUnless(shutil.which("ssh-keygen"), "needs ssh-keygen")
 class UpdateTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -60,34 +88,49 @@ class UpdateTests(unittest.TestCase):
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
         os.environ["KILN_UPDATE_API"] = f"http://127.0.0.1:{cls.srv.server_port}"
         U.API = os.environ["KILN_UPDATE_API"]
+        cls.keys = tempfile.TemporaryDirectory()
+        cls.key, cls.pub = make_key(cls.keys.name, "release")
+        cls.other, cls.other_pub = make_key(cls.keys.name, "attacker")
 
     @classmethod
     def tearDownClass(cls):
         cls.srv.shutdown()
         cls.srv.server_close()
+        cls.keys.cleanup()
         os.environ.pop("KILN_UPDATE_API", None)
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         d = self.tmp.name
         U.SHARE, U.CACHE, U.CONF = f"{d}/share", f"{d}/cache", f"{d}/conf"
-        U.STATE, U.EXT = f"{d}/cache/update.json", f"{d}/ext"
+        U.STATE, U.EXT, U.KEY_FILE = f"{d}/cache/update.json", f"{d}/ext", f"{d}/share/release-key.pub"
         for p in (U.SHARE, U.CACHE, U.CONF, U.EXT):
             os.makedirs(p)
         with open(f"{U.SHARE}/VERSION", "w") as f:
             f.write("1.1.0\n")
         with open(f"{U.EXT}/extension.js", "w") as f:
             f.write("old")
-        Fake.release = {"tag_name": "v1.2.0", "html_url": "https://example.test/r", "body": "notes", "draft": False,
-                        "prerelease": False}
-        Fake.tar = release_tar("1.2.0")
+        with open(U.KEY_FILE, "w") as f:
+            f.write("# the maintainer's key\n" + self.pub + "\n")
+        self.publish("1.2.0")
         self.events = []
         U.restart = lambda: self.events.append("restart")
         U.notify = lambda t, b: self.events.append(("notify", t))
         U.healthy = lambda since: True
 
     def tearDown(self):
+        for n, f in ORIGINALS.items():            # tests replace some of these; the next one starts clean
+            setattr(U, n, f)
         self.tmp.cleanup()
+
+    def publish(self, version, key=None, tar=None, signed=True):
+        tar = tar or release_tar(version)
+        Fake.blobs = {"11": tar, "12": sign(key or self.key, tar, self.tmp.name)}
+        assets = [{"name": f"kiln-{version}.tar.gz", "id": 11}]
+        if signed:
+            assets.append({"name": f"kiln-{version}.tar.gz.sig", "id": 12})
+        Fake.release = {"tag_name": f"v{version}", "html_url": "https://example.test/r", "body": "notes",
+                        "draft": False, "prerelease": False, "assets": assets}
 
     def test_versions(self):
         self.assertEqual(U.parse("v1.2.10"), (1, 2, 10))
@@ -95,7 +138,7 @@ class UpdateTests(unittest.TestCase):
         for bad in ("1.2", "v1.2.3-rc1", "latest", "", None):
             self.assertIsNone(U.parse(bad))
 
-    def test_check_finds_a_newer_release_and_ignores_drafts(self):
+    def test_check_finds_a_newer_signed_release_and_ignores_drafts(self):
         st = U.check()
         self.assertTrue(st["newer"])
         self.assertEqual((st["current"], st["latest"]), ("1.1.0", "1.2.0"))
@@ -103,6 +146,46 @@ class UpdateTests(unittest.TestCase):
         self.assertFalse(U.check()["newer"])
         Fake.release.update(tag_name="v9.0.0", draft=True)
         self.assertIn("No release", U.check()["error"])
+
+    def test_an_unsigned_release_is_never_offered_or_installed(self):
+        self.publish("1.2.0", signed=False)
+        st = U.check()
+        self.assertFalse(st["newer"])
+        self.assertEqual(st["unsigned"], "1.2.0")
+        self.assertIn("not signed", st["error"])
+        U.auto()
+        U.auto()
+        self.assertEqual([e for e in self.events if isinstance(e, tuple)],
+                         [("notify", "Kiln ignored version 1.2.0")])        # warned once
+        with self.assertRaises(U.UpdateError) as c:
+            U.apply("1.2.0", runner=lambda *a, **k: self.fail("the installer must not run"))
+        self.assertIn("not signed", str(c.exception))
+
+    def test_a_release_signed_by_someone_else_is_refused(self):
+        self.publish("1.2.0", key=self.other)               # e.g. a stolen GitHub account
+        with self.assertRaises(U.UpdateError) as c:
+            U.apply("1.2.0", runner=lambda *a, **k: self.fail("the installer must not run"))
+        self.assertIn("signature", str(c.exception))
+        self.assertEqual(self.events, [])
+
+    def test_a_tampered_archive_is_refused(self):
+        self.publish("1.2.0")
+        Fake.blobs["11"] = release_tar("1.2.0", {"kiln-abc123/share/evil.py": "print('x')"})   # swapped after signing
+        with self.assertRaises(U.UpdateError) as c:
+            U.apply("1.2.0", runner=lambda *a, **k: self.fail("the installer must not run"))
+        self.assertIn("signature", str(c.exception))
+
+    def test_without_a_release_key_nothing_is_installed(self):
+        os.remove(U.KEY_FILE)
+        with self.assertRaises(U.UpdateError) as c:
+            U.apply("1.2.0", runner=lambda *a, **k: self.fail("the installer must not run"))
+        self.assertIn("no release key", str(c.exception))
+
+    def test_a_second_trusted_key_also_works(self):
+        with open(U.KEY_FILE, "a") as f:
+            f.write(self.other_pub + "\n")
+        self.publish("1.2.0", key=self.other)
+        self.assertEqual(U.apply("1.2.0", runner=lambda *a, **k: (0, "")), "updated 1.1.0 → 1.2.0")
 
     def test_extract_refuses_bad_archives(self):
         for name, data in (("wrong", release_tar("9.9.9")),
@@ -125,13 +208,12 @@ class UpdateTests(unittest.TestCase):
                     f.write("new")
             return 0, ""
         self.assertEqual(U.apply("1.2.0", runner=runner), "updated 1.1.0 → 1.2.0")
-        self.assertEqual(ran[0][:2][0], "bash")
+        self.assertEqual(ran[0][0], "bash")
         self.assertIn("--no-apply", ran[0])
         self.assertTrue(os.path.exists(f"{U.SHARE}.prev/VERSION"))          # the old version is kept
         with open(f"{U.EXT}.prev/extension.js") as f:
             self.assertEqual(f.read(), "old")
-        st = U.load_state()
-        self.assertTrue(st["needs_relogin"])
+        self.assertTrue(U.load_state()["needs_relogin"])
         self.assertIn(("notify", "Kiln 1.2.0 is installed"), self.events)
         self.assertEqual(self.events.count("restart"), 1)
 
@@ -159,7 +241,7 @@ class UpdateTests(unittest.TestCase):
         set_mode("notify")
         self.assertEqual(U.auto(), "1.2.0 is available")
         U.auto()
-        self.assertEqual([e for e in self.events if isinstance(e, tuple)].__len__(), 1)    # told once, not every time
+        self.assertEqual(len([e for e in self.events if isinstance(e, tuple)]), 1)    # told once, not every time
         set_mode("auto")
         with open(f"{U.CACHE}/mode", "w") as f:
             f.write("focus")

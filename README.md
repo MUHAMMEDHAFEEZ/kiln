@@ -64,12 +64,12 @@ cd kiln
 Then **log out and back in once** so GNOME loads the new top bar and lock screen.
 Run `kiln doctor` at any time to check that everything is in place.
 
-**Updates**: Kiln looks for a new release on GitHub a couple of minutes after it starts and then every few
+**Updates**: Kiln looks for a new signed release on GitHub a couple of minutes after it starts and then every few
 hours. By default it tells you (a notification, then **Settings → General → Kiln updates → Update now**, or
 `kiln update`). Set it to *Install them for me* to have it update by itself, or turn it off. Your settings,
 themes and lists are kept, the previous version stays in `~/.local/share/kiln.prev`, and if a new version does
 not start it is put back automatically (`kiln update --rollback` does it by hand). Installing from a clone
-works too: `git pull` and `./install.sh`. Details: [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+works too: `git pull` and `./install.sh`. A release is installed only if it carries the maintainer's signature, so nobody else can push an update ([SECURITY.md](SECURITY.md)). Details: [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 <details>
 <summary>What the installer changes</summary>

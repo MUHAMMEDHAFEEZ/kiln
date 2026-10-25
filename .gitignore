@@ -3,3 +3,4 @@ __pycache__/
 *.tmp
 *.part
 .DS_Store
+dist/

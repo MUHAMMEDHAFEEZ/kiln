@@ -1,0 +1,6 @@
+# the release archive (what `kiln update` downloads) leaves out the things only a contributor needs
+docs/screenshots export-ignore
+docs/brand export-ignore
+tests export-ignore
+tools export-ignore
+.gitattributes export-ignore

@@ -10,9 +10,14 @@
 "updates.mode" in ~/.config/kiln/config.json:  "notify" (default: a notification, you press update),
 "auto" (install it quietly when you are not in Focus mode) or "off".
 
-An update downloads the release's source archive, installs it exactly like ./install.sh --no-apply, keeps
-your settings, themes and lists, and refreshes the app icon and accent colours. The previous version is kept
-in ~/.local/share/kiln.prev; if the new one does not start, it is put back by itself.
+Nothing is installed unless the release archive carries a signature made with the project's release key
+(share/release-key.pub, checked with `ssh-keygen -Y verify`). The private half of that key lives only with the
+maintainer, so a stolen GitHub account or token cannot push an update to anyone. With no key, or an archive
+whose signature does not match, Kiln refuses and says so.
+
+An update downloads the signed archive, installs it exactly like ./install.sh --no-apply, keeps your settings,
+themes and lists, and refreshes the app icon and accent colours. The previous version is kept in
+~/.local/share/kiln.prev; if the new one does not start, it is put back by itself.
 Standard library only (and `gh` when it is installed and logged in, which also works while the repository is
 private).
 """
@@ -35,6 +40,8 @@ SHARE = os.path.dirname(os.path.abspath(__file__))
 CONF = os.environ.get("KILN_CONFIG", f"{HOME}/.config/kiln")
 CACHE = os.environ.get("KILN_CACHE", f"{HOME}/.cache/kiln")
 STATE = f"{CACHE}/update.json"
+KEY_FILE = f"{SHARE}/release-key.pub"           # one or more public keys ("ssh-ed25519 AAAA… comment"), one per line
+SIG_NAMESPACE = "kiln-release"
 REPO = os.environ.get("KILN_UPDATE_REPO", "MUHAMMEDHAFEEZ/kiln")
 API = os.environ.get("KILN_UPDATE_API", "https://api.github.com").rstrip("/")
 EXT = f"{HOME}/.local/share/gnome-shell/extensions/kiln-shell@local"
@@ -90,20 +97,20 @@ def mode():
 
 
 # ----------------------------------------------------------------- talking to GitHub
-def _gh(*args):
+def _gh(*args, accept=None):
     """Output of `gh api ...` when gh is installed and logged in, else None."""
     if not shutil.which("gh") or os.environ.get("KILN_UPDATE_NO_GH"):
         return None
+    extra = ["-H", f"Accept: {accept}"] if accept else []
     try:
-        r = subprocess.run(["gh", "api", *args], capture_output=True, timeout=60)
+        r = subprocess.run(["gh", "api", *extra, *args], capture_output=True, timeout=120)
     except (OSError, subprocess.SubprocessError):
         return None
     return r.stdout if r.returncode == 0 and r.stdout else None
 
 
-def _http(path):
-    req = urllib.request.Request(API + path, headers={"User-Agent": "Kiln-updater",
-                                                       "Accept": "application/vnd.github+json"})
+def _http(path, accept="application/vnd.github+json"):
+    req = urllib.request.Request(API + path, headers={"User-Agent": "Kiln-updater", "Accept": accept})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return r.read(MAX_DOWNLOAD + 1)
@@ -138,19 +145,67 @@ def check():
     except UpdateError as e:
         return save_state(checked=time.time(), error=str(e), current=installed())
     cur, new = installed(), rel["tag_name"].lstrip("v")
-    return save_state(checked=time.time(), error=None, current=cur, latest=new, url=rel.get("html_url", ""),
-                      notes=(rel.get("body") or "")[:1500], newer=parse(new) > (parse(cur) or (0, 0, 0)))
+    newer = parse(new) > (parse(cur) or (0, 0, 0))
+    try:
+        release_assets(rel)
+        problem = None
+    except UpdateError as e:
+        problem, newer = str(e), False                  # an unsigned release is never offered
+    return save_state(checked=time.time(), error=problem, current=cur, latest=new, url=rel.get("html_url", ""),
+                      notes=(rel.get("body") or "")[:1500], newer=newer,
+                      unsigned=new if problem and parse(new) > (parse(cur) or (0, 0, 0)) else None)
 
 
-# ----------------------------------------------------------------- download and install
-def download(tag, dest):
-    raw = _gh(f"repos/{REPO}/tarball/{tag}") if not os.environ.get("KILN_UPDATE_API") else None
+# ----------------------------------------------------------------- download, verify, install
+def release_assets(rel):
+    """(archive asset, signature asset) of a release, or an UpdateError when it is not properly signed."""
+    version = rel["tag_name"].lstrip("v")
+    by_name = {a.get("name"): a for a in rel.get("assets") or []}
+    archive, sig = by_name.get(f"kiln-{version}.tar.gz"), by_name.get(f"kiln-{version}.tar.gz.sig")
+    if not archive or not sig:
+        raise UpdateError(f"Release {version} is not signed, so Kiln will not install it.")
+    return archive, sig
+
+
+def download_asset(asset, dest):
+    """Save a release asset (through the API, which also works for a private repository)."""
+    api_path = f"/repos/{REPO}/releases/assets/{asset['id']}"
+    raw = None if os.environ.get("KILN_UPDATE_API") else _gh(api_path.lstrip("/"), accept="application/octet-stream")
     if raw is None:
-        raw = _http(f"/repos/{REPO}/tarball/{tag}")
+        raw = _http(api_path, accept="application/octet-stream")
     if len(raw) > MAX_DOWNLOAD:
         raise UpdateError("The download is larger than expected; not installing it.")
     with open(dest, "wb") as f:
         f.write(raw)
+
+
+def trusted_keys():
+    try:
+        with open(KEY_FILE, encoding="utf-8") as f:
+            keys = [l.strip() for l in f if l.strip() and not l.lstrip().startswith("#")]
+    except OSError:
+        keys = []
+    keys = [k for k in keys if k.startswith("ssh-ed25519 ") or k.startswith("sk-ssh-ed25519")]
+    if not keys:
+        raise UpdateError("This copy of Kiln has no release key, so it cannot check updates. "
+                          "Update by hand (git pull, then ./install.sh).")
+    return keys
+
+
+def verify_signature(archive, sig):
+    """Raise unless `sig` is a valid signature of `archive` by one of the trusted release keys."""
+    keys = trusted_keys()
+    if not shutil.which("ssh-keygen"):
+        raise UpdateError("ssh-keygen is missing (package openssh-client), so the signature cannot be checked.")
+    with tempfile.TemporaryDirectory(dir=CACHE) as d:
+        allowed = f"{d}/allowed_signers"
+        with open(allowed, "w", encoding="utf-8") as f:
+            f.write("".join(f"kiln-release {k}\n" for k in keys))
+        with open(archive, "rb") as data:
+            r = subprocess.run(["ssh-keygen", "-Y", "verify", "-f", allowed, "-I", "kiln-release", "-n", SIG_NAMESPACE,
+                                "-s", sig], stdin=data, capture_output=True, timeout=60)
+    if r.returncode != 0:
+        raise UpdateError("The signature of this update is not valid, so Kiln will not install it.")
 
 
 def extract(archive, into, version):
@@ -235,8 +290,14 @@ def apply(version=None, runner=sh):
     save_state(last_result="installing", target=version)
     work = tempfile.mkdtemp(prefix="update-", dir=CACHE)
     try:
-        archive = f"{work}/kiln.tar.gz"
-        download(f"v{version}", archive)
+        archive, sig = f"{work}/kiln.tar.gz", f"{work}/kiln.tar.gz.sig"
+        rel = latest_release()
+        if rel["tag_name"].lstrip("v") != version:
+            raise UpdateError(f"{version} is not the newest release any more; run the update again.")
+        a_asset, s_asset = release_assets(rel)
+        download_asset(a_asset, archive)
+        download_asset(s_asset, sig)
+        verify_signature(archive, sig)                  # nothing below runs unless the maintainer signed this
         os.makedirs(f"{work}/src")
         top = extract(archive, f"{work}/src", version)
         backup()
@@ -272,6 +333,10 @@ def auto():
     if m == "off":
         return "updates are off"
     st = check()
+    if st.get("unsigned") and st.get("notified_unsigned") != st["unsigned"]:
+        notify(f"Kiln ignored version {st['unsigned']}",
+               "It is on GitHub but is not signed with the release key. If you did not publish it, check your GitHub account.")
+        save_state(notified_unsigned=st["unsigned"])
     if not st.get("newer"):
         return st.get("error") or "up to date"
     latest = st["latest"]
