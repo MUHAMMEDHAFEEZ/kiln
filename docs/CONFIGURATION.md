@@ -27,7 +27,7 @@ All settings live in **`~/.config/kiln/config.json`**. Open it with `kiln config
   "terminal": { "project_commands": true },
   "modes": { "focus_mutes_notifications": true },
   "icons": { "recent_dot": true, "recent_hours": 48 },
-  "dock": { "cards": ["git", "system", "services", "day", "notes"] },
+  "dock": { "cards": ["git", "system", "day", "notes", "tests"] },
   "week_start": "sun",
 
   "integrations": { "github": true, "lark": false, "claude_code": true },
@@ -81,7 +81,7 @@ They are calculated on your machine and follow your system's time zone and dayli
 
 | Key | Default | Meaning |
 |---|---|---|
-| `dock.cards` | all five | Which cards may use the free space beside the terminal, in the order they are placed: `git`, `system`, `services`, `day`, `notes`. Cards that do not fit are left out, so a laptop screen shows none. |
+| `dock.cards` | `git`, `system`, `day`, `notes`, `tests` | Which cards may use the free space beside the terminal, in the order they are placed: `git`, `system`, `day`, `notes`, `tests`, `services`. `services` (dev servers and containers) is off by default because the work bar already shows them. Cards that do not fit are left out, so a laptop screen shows none. |
 | `week_start` | `"sun"` | First day of the week in the calendar: `"sun"`, `"sat"` or `"mon"`. |
 
 The **Today** card shows prayer times only when `prayer.enabled` is on and a location is set (see

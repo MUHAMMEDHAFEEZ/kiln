@@ -39,7 +39,7 @@ DEFAULTS = {
     "terminal": {"project_commands": True},
     "modes": {"focus_mutes_notifications": True},
     "icons": {"recent_dot": True, "recent_hours": 48},
-    "dock": {"cards": ["git", "system", "services", "day", "notes"]},
+    "dock": {"cards": ["git", "system", "day", "notes", "tests"]},
     "week_start": "sun",
     "integrations": {"github": True, "lark": False, "claude_code": True},
     "theme_apply": {"gtk": True, "dock": True, "gnome_terminal": True, "wallpaper": True},
@@ -446,9 +446,10 @@ class Settings(Gtk.Window):
                              "A laptop screen has none.", "kiln-sub", wrap=True), False, False, 0)
         for key, title, hint in (("git", "Git", "Changed files and recent commits of the current project."),
                                  ("system", "System", "CPU, memory, GPU, network, disk and the busiest programs."),
-                                 ("services", "Running", "Dev servers, services and Docker containers."),
                                  ("day", "Today", "Calendar, Hijri date and prayer times (set your city under Lock screen & prayer)."),
-                                 ("notes", "Notes", "A scratchpad for each project, and a global one.")):
+                                 ("notes", "Notes", "A scratchpad for each project, and a global one."),
+                                 ("tests", "Tests", "Result and output of the last test run, with a run button."),
+                                 ("services", "Running", "Dev servers and containers (the work bar already shows them).")):
             sw = Gtk.Switch(active=key in self.cfg["dock"]["cards"])
             sw.connect("notify::active", lambda s_, _p, k=key: self.toggle_dock(k, s_.get_active()))
             box.pack_start(self.row(title, sw, hint), False, False, 0)
@@ -466,7 +467,7 @@ class Settings(Gtk.Window):
         return box
 
     def toggle_dock(self, key, on):
-        order = ["git", "system", "services", "day", "notes"]
+        order = ["git", "system", "day", "notes", "tests", "services"]
         cards = {c for c in self.cfg["dock"]["cards"] if c != key}
         if on:
             cards.add(key)

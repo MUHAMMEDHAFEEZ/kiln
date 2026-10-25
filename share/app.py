@@ -54,7 +54,7 @@ DEFAULT_CONFIG = {
     "terminal": {"project_commands": True},
     "modes": {"focus_mutes_notifications": True},
     "icons": {"recent_dot": True, "recent_hours": 48},
-    "dock": {"cards": ["git", "system", "services", "day", "notes"]},
+    "dock": {"cards": ["git", "system", "day", "notes", "tests"]},
     "week_start": "sun",
 }
 
@@ -202,6 +202,7 @@ def text(cr, s, x, y, size, color, bold=False, align="l", maxw=None, alpha=1.0, 
     lay = PangoCairo.create_layout(cr)
     if ltr:
         lay.set_auto_dir(False)
+        lay.get_context().set_base_dir(Pango.Direction.LTR)
     fd = Pango.FontDescription()
     fd.set_family("Hack" if mono else FONT)
     fd.set_weight(Pango.Weight.BOLD if bold else Pango.Weight.NORMAL)
@@ -1301,6 +1302,9 @@ class Cards(Gtk.Overlay):
             text(cr, time.strftime("%p"), x + 26 + tw, y + 54, 14, C["dim"], bold=True)
         text(cr, time.strftime("%a, %b %d"), x + 22, y + 78, 13, C["dim"])
         vline(cr, x + 150, y + 18, y + h - 18)
+        if "system" in DOCK_ACTIVE:                     # the System card already has CPU and RAM
+            self.strip_dates(cr, x, y, w)
+            return
         rows = [("CPU", self.metrics.cpu, self.hist["cpu"], C["acc"]),
                 ("RAM", self.metrics.mem(), self.hist["ram"], C["acc2"])]
         for i, (label, val, hist, col) in enumerate(rows):
@@ -1308,6 +1312,28 @@ class Cards(Gtk.Overlay):
             text(cr, label, x + 168, cy, 11, C["dim"])
             text(cr, f"{val:.0f}%", x + 238, cy, 14, C["text"], bold=True, align="r")
             self.sparkline(cr, x + 252, cy - 16, w - 252 - 20, 18, hist, col)
+
+    def strip_dates(self, cr, x, y, w):
+        """Hijri date, and the next prayer (or the week number when no city is set)."""
+        today = datetime.date.today()
+        arabic = (CFG.get("prayer") or {}).get("language", "en") == "ar"
+        right = x + w - 20
+        glyph(cr, "moon", x + 166, y + 22, 15, C["acc2"])
+        text(cr, PR.hijri_text(today.year, today.month, today.day, arabic), x + 190, y + 36, 13, C["text"],
+             maxw=right - x - 190, ltr=True)
+        glyph(cr, "timer", x + 166, y + 54, 15, C["acc2"])
+        state = prayer_state()
+        if state:
+            _t, name, when = state
+            lang = (CFG.get("prayer") or {}).get("language", "en")
+            nm = PRAYER_AR[name] if lang == "ar" else name
+            nw = text(cr, nm, x + 190, y + 68, 13, C["acc"], bold=True, maxw=70, ltr=True)
+            text(cr, when.strftime(HMP), x + 190 + nw + 8, y + 68, 13, C["acc"], bold=True)
+            text(cr, in_words(when - datetime.datetime.now()), right, y + 68, 11, C["dim"], align="r")
+        else:
+            iso = today.isocalendar()
+            text(cr, f"Week {iso[1]} · day {today.timetuple().tm_yday}", x + 190, y + 68, 13, C["text"],
+                 maxw=right - x - 190)
 
     # 2) today: Lark tasks + local tasks
     def today_tabs(self, cr, x, y):
@@ -1710,6 +1736,7 @@ class TerminalCard(Gtk.Box):
         self.pack_start(self.stack, True, True, 0)
         self.pack_start(self.foot, False, False, 0)
         self.tabs, self.active = [], 0
+        self.hud, self.on_hud, self.alpha = None, None, 0.80      # Focus mode: timer pill, solid card
         self.hover, self.hits, self.fhits = None, [], []
         self.branch = ""
         if not os.path.exists(QUICK):
@@ -1736,7 +1763,7 @@ class TerminalCard(Gtk.Box):
         t.set_margin_start(20)
         t.set_margin_end(14)
         t.set_margin_top(4)
-        t.set_font(Pango.FontDescription("Hack 11"))
+        t.set_font(Pango.FontDescription(f"Hack {getattr(self, 'font_pt', 11)}"))
         t.set_cell_height_scale(1.12)
         t.set_size(84, 9)
         t.set_scrollback_lines(5000)
@@ -1766,6 +1793,12 @@ class TerminalCard(Gtk.Box):
         t.connect("key-press-event", self.on_key)
         t.connect("button-press-event", self.on_term_button)
         return t
+
+    def set_font_pt(self, pt):
+        self.font_pt = pt
+        for tab in self.tabs:
+            for pane in tab["panes"]:
+                pane["term"].set_font(Pango.FontDescription(f"Hack {pt}"))
 
     def set_size(self, w, h):
         """Resize the card (the window is resized by the caller). The strips draw to self.W."""
@@ -2063,6 +2096,9 @@ class TerminalCard(Gtk.Box):
             self.close_tab(key[1])
         elif kind == "plus":
             self.new_tab(self.tabs[self.active]["cwd"])
+        elif kind == "hud" and self.on_hud:
+            self.on_hud()
+            self.head.queue_draw()
         elif kind == "dot":
             act = self.DOTS[key[1]][0]
             if act == "restart":
@@ -2138,6 +2174,12 @@ class TerminalCard(Gtk.Box):
             set_rgba(cr, C["ink"], 0.07)
             cr.fill()
         glyph(cr, "plus", tx + 7, 15, 14, C["dim"] if self.hover != ("plus",) else C["text"])
+        # focus timer pill (only in Focus mode)
+        if self.hud:
+            label, running = self.hud()
+            pw = pill(cr, self.W - 30 - len(self.DOTS) * 22 - 14, 28, label, 12.5, C["mint"] if running else C["acc"],
+                      align="r", bold=True)
+            self.hits.append(((self.W - 30 - len(self.DOTS) * 22 - 14 - pw, 10, pw, 26), ("hud",)))
         # dots
         for i, (_a, col, label) in enumerate(self.DOTS):
             dx = self.W - 30 - (len(self.DOTS) - 1 - i) * 22
@@ -4871,6 +4913,37 @@ def prayer_ready():
         isinstance(loc.get("latitude"), (int, float)) and isinstance(loc.get("longitude"), (int, float))
 
 
+def prayer_state(now=None):
+    """(times today, next prayer name, its datetime) from the configured location, or None."""
+    if not prayer_ready():
+        return None
+    now = now or datetime.datetime.now()
+    loc, pr = CFG["location"], CFG["prayer"]
+    tz = time.localtime().tm_gmtoff / 3600
+
+    def times(day):
+        return PR.prayer_times(day.year, day.month, day.day, loc["latitude"], loc["longitude"], tz,
+                               pr.get("method", "mwl"), pr.get("asr", "standard"))
+    today = now.date()
+    t = times(today)
+    midnight = datetime.datetime.combine(today, datetime.time())
+    for name in ("Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"):
+        when = midnight + datetime.timedelta(hours=t[name])
+        if when > now:
+            return t, name, when
+    tomorrow = today + datetime.timedelta(days=1)
+    return t, "Fajr", datetime.datetime.combine(tomorrow, datetime.time()) + \
+        datetime.timedelta(hours=times(tomorrow)["Fajr"])
+
+
+PRAYER_AR = dict(Fajr="الفجر", Sunrise="الشروق", Dhuhr="الظهر", Asr="العصر", Maghrib="المغرب", Isha="العشاء")
+
+
+def in_words(delta):
+    mins = max(1, int(delta.total_seconds() // 60))
+    return f"{mins // 60}h {mins % 60}m" if mins >= 60 else f"{mins} min"
+
+
 class DockCard(Gtk.DrawingArea):
     """A 330 px tall card in the free space of a big screen. Subclasses draw body() and handle activate()."""
     KEY, TITLE, ICON = "", "", "folder"
@@ -4899,6 +4972,12 @@ class DockCard(Gtk.DrawingArea):
 
     def set_width(self, w):
         self.W = int(w)
+        self.set_size_request(self.W, self.H)
+        self.queue_resize()
+        self.queue_draw()
+
+    def set_height(self, h):
+        self.H = int(h)
         self.set_size_request(self.W, self.H)
         self.queue_resize()
         self.queue_draw()
@@ -4984,7 +5063,8 @@ class GitCard(DockCard):
         files = proj.get("files") or []
         if not files:
             text(cr, "Working tree clean", x0, 152, 13, C["dim"])
-        for i, (code, path) in enumerate(files[:7]):
+        rows = max(4, (h - 150) // 24)
+        for i, (code, path) in enumerate(files[:rows]):
             y = 148 + i * 24
             self.region(("file", path), x0 - 6, y - 16, colw + 12, 22)
             col = C[self.STATUS.get(code, "dim")]
@@ -4996,10 +5076,10 @@ class GitCard(DockCard):
             bwid = text(cr, base, x0 + 26, y, 12.5, C["text"], maxw=colw - 30)
             if parent and bwid < colw - 70:
                 text(cr, parent, x0 + 26 + bwid + 8, y, 11, C["dim"], maxw=colw - 30 - bwid - 8)
-        if len(files) > 7:
-            text(cr, f"+{len(files) - 7} more", x0 + 26, 316, 11.5, C["dim"])
+        if len(files) > rows:
+            text(cr, f"+{len(files) - rows} more", x0 + 26, h - 14, 11.5, C["dim"])
         log = proj.get("log") or []
-        for i, (sha, ts, _author, subject) in enumerate(log[:7]):
+        for i, (sha, ts, _author, subject) in enumerate(log[:rows]):
             y = 148 + i * 24
             self.region(("commit", sha), x1 - 6, y - 16, colw + 12, 22)
             text(cr, sha, x1, y, 11.5, C["acc"], mono=True)
@@ -5289,6 +5369,101 @@ class ServicesCard(DockCard):
             self.qbar.dev_action(ev, key)
 
 
+# --- Tests: status of the last run and the tail of its output
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def log_tail(path, n=40):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return []
+    keep = [_ANSI.sub("", l).rstrip() for l in lines
+            if "cannot set terminal process group" not in l and "no job control" not in l]
+    return [l for l in keep if l.strip()][-n:]
+
+
+class TestsCard(DockCard):
+    KEY, TITLE, ICON, PREF_W = "tests", "Tests", "check-circle", 500
+    TICK = 2
+
+    def __init__(self, terminal=None, qbar=None):
+        self.qbar = qbar
+        super().__init__(terminal)
+
+    def body(self, cr, w, h):
+        proj = WORK.get("proj")
+        if not proj:
+            text(cr, "Open a project to see its tests", 24, 98, 14, C["dim"])
+            return
+        cmd = proj.get("test")
+        if not cmd:
+            cmds = project_commands(proj["path"])
+            if not cmds:
+                text(cr, f"No tests or scripts found in {proj['name']}", 24, 90, 14, C["text"], maxw=w - 48)
+                text(cr, "A test script, manage.py, a Makefile, cargo, go or flutter makes this card useful.",
+                     24, 114, 12, C["dim"], maxw=w - 48)
+                return
+            text(cr, "No tests found. The project's commands:", 24, 82, 13, C["dim"], maxw=w - 48)
+            for i, (label, command) in enumerate(cmds[:max(2, (h - 120) // 30)]):
+                y = 118 + i * 30
+                self.region(("cmd", command), 14, y - 19, w - 28, 28)
+                rrect(cr, 24, y - 13, 18, 18, 5)
+                set_rgba(cr, C["acc"], 0.18)
+                cr.fill()
+                text(cr, "▶", 33, y, 9, C["acc"], align="c")
+                text(cr, label, 52, y, 12.5, C["text"], mono=True, maxw=w - 80)
+            return
+        tr = (self.qbar.tests if self.qbar else {}).get(proj["path"], {})
+        st = tr.get("status")
+        word, col = {"running": ("Running…", C["amber"]), "pass": ("Passed", C["mint"]),
+                     "fail": ("Failed", C["red"])}.get(st, ("Not run yet", C["dim"]))
+        cr.new_path()
+        cr.arc(30, 78, 6, 0, 2 * math.pi)
+        set_rgba(cr, col, 1)
+        cr.fill()
+        text(cr, word, 46, 84, 19, C["text"], bold=True)
+        sub = f"{since(tr['t'])} ago" + (f" · {tr['dur']:.1f}s" if tr.get("dur") else "") if tr.get("t") else \
+            "one click runs them"
+        text(cr, sub, w - 22, 80, 12, C["dim"], align="r")
+        self.region(("run",), 14, 94, 118, 30)
+        hot = self.hover == ("run",)
+        rrect(cr, 20, 98, 106, 24, 12)
+        set_rgba(cr, C["acc"], 0.9 if hot else 0.75)
+        cr.fill()
+        text(cr, "Run tests" if st != "running" else "Running…", 73, 115, 12, C["on_acc"], bold=True, align="c")
+        text(cr, cmd, 142, 115, 11.5, C["dim"], mono=True, maxw=w - 142 - 22)
+        hline(cr, 20, w - 20, 134)
+        lines = log_tail(tr.get("log", "")) if tr.get("log") else []
+        if not lines:
+            text(cr, "No output yet", 24, 160, 12.5, C["dim"])
+            return
+        room = max(3, int((h - 144 - 12) // 16))
+        shown = lines[-room:]
+        self.region(("log",), 14, 140, w - 28, h - 150)
+        for i, line in enumerate(shown):
+            low = line.lower()
+            bad = any(k in low for k in ("fail", "error", "traceback", "assert", "✗", "not ok"))
+            good = any(k in low for k in ("passed", " ok", "all good", "✓", "success"))
+            text(cr, line, 24, 158 + i * 16, 11.5, C["red"] if bad else (C["mint"] if good else C["dim"]),
+                 mono=True, maxw=w - 48)
+
+    def activate(self, key, ev):
+        proj = WORK.get("proj")
+        if not proj or not self.qbar:
+            return
+        if key[0] == "cmd":
+            if self.terminal:
+                term_run(self.terminal, proj["path"], key[1])
+        elif key == ("run",):
+            self.qbar.run_tests(proj["path"])
+        elif key == ("log",):
+            log = self.qbar.tests.get(proj["path"], {}).get("log")
+            if log and self.terminal:
+                term_run(self.terminal, proj["path"], f"less -R +G {shlex.quote(log)}")
+
+
 # --- Today: a month calendar, the Hijri date and prayer times
 class DayCard(DockCard):
     KEY, TITLE, ICON, PREF_W = "day", "Today", "calendar", 640
@@ -5297,12 +5472,6 @@ class DayCard(DockCard):
     @staticmethod
     def specs():
         return (560, 640) if prayer_ready() else (330, 360)
-
-    def _times(self, day):
-        loc, pr = CFG["location"], CFG["prayer"]
-        tz = time.localtime().tm_gmtoff / 3600
-        return PR.prayer_times(day.year, day.month, day.day, loc["latitude"], loc["longitude"], tz,
-                               pr.get("method", "mwl"), pr.get("asr", "standard"))
 
     def body(self, cr, w, h):
         import calendar as cal
@@ -5340,23 +5509,9 @@ class DayCard(DockCard):
         city = (CFG.get("location") or {}).get("city") or "Prayer times"
         text(cr, city.upper(), x0, 78, 11, C["dim"], bold=True, maxw=w - x0 - 20)
         now = datetime.datetime.now()
-        t_today = self._times(today)
-        nxt, nxt_dt = None, None
-        order_p = ["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"]
-        for name in order_p:
-            hh = t_today[name]
-            when = datetime.datetime.combine(today, datetime.time()) + datetime.timedelta(hours=hh)
-            if when > now:
-                nxt, nxt_dt = name, when
-                break
-        if nxt is None:
-            tomorrow = today + datetime.timedelta(days=1)
-            nxt = "Fajr"
-            nxt_dt = datetime.datetime.combine(tomorrow, datetime.time()) + \
-                datetime.timedelta(hours=self._times(tomorrow)["Fajr"])
+        t_today, nxt, nxt_dt = prayer_state(now)
         lang = (CFG.get("prayer") or {}).get("language", "en")
-        label = {"ar": dict(Fajr="الفجر", Sunrise="الشروق", Dhuhr="الظهر", Asr="العصر", Maghrib="المغرب", Isha="العشاء")}.get(
-            lang, {})
+        label = PRAYER_AR if lang == "ar" else {}
         rows = ["Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha"]
         for i, name in enumerate(rows):
             y = 108 + i * 34
@@ -5372,9 +5527,7 @@ class DayCard(DockCard):
             text(cr, label.get(name, name), x0, y, 13.5 if name != "Sunrise" else 12, col, bold=is_next)
             text(cr, when.strftime(HMP), w - 24 - (74 if is_next else 0), y, 13.5, col, bold=is_next, align="r")
             if is_next:
-                mins = max(1, int((nxt_dt - now).total_seconds() // 60))
-                left = f"{mins // 60}h {mins % 60}m" if mins >= 60 else f"{mins} min"
-                text(cr, left, w - 24, y, 11.5, C["acc"], align="r")
+                text(cr, in_words(nxt_dt - now), w - 24, y, 11.5, C["acc"], align="r")
 
 
 # --- Notes: a scratchpad per project (and a global one)
@@ -5427,6 +5580,11 @@ class NotesCard(Gtk.Box):
 
     def set_width(self, w):
         self.W = int(w)
+        self.set_size_request(self.W, self.H)
+        self.queue_resize()
+
+    def set_height(self, h):
+        self.H = int(h)
         self.set_size_request(self.W, self.H)
         self.queue_resize()
 
@@ -5529,9 +5687,10 @@ class NotesCard(Gtk.Box):
 
 
 # --- where the cards go: row 1 runs to the right edge, row 2 stops at the Focus card
-DOCK_ORDER = ["git", "system", "services", "day", "notes"]
-DOCK_MIN = {"git": 460, "system": 420, "services": 380, "day": 560, "notes": 320}
-DOCK_PREF = {"git": 620, "system": 520, "services": 520, "day": 640, "notes": 430}
+DOCK_ORDER = ["git", "system", "day", "notes", "tests", "services"]
+DOCK_MIN = {"git": 460, "system": 420, "services": 380, "day": 560, "notes": 320, "tests": 380}
+DOCK_PREF = {"git": 620, "system": 520, "services": 520, "day": 640, "notes": 430, "tests": 500}
+DOCK_ACTIVE = set()              # the cards actually placed on this screen (the clock card looks at it)
 
 
 def plan_dock(L, wanted, specs):
@@ -5713,7 +5872,7 @@ def main():
         cr.set_operator(cairo.OPERATOR_CLEAR)
         cr.paint()
         cr.set_operator(cairo.OPERATOR_OVER)
-        card_bg(cr, 0, 0, term.W, term.H, 20, 0.80)
+        card_bg(cr, 0, 0, term.W, term.H, 20, term.alpha)
         return False
 
     # make_window already connected a clearing handler; ours runs after and paints the card
@@ -5730,8 +5889,8 @@ def main():
     specs["day"] = DayCard.specs()
     makers = {"git": lambda: GitCard(term), "system": lambda: SystemCard(term),
               "services": lambda: ServicesCard(term, qbar), "day": lambda: DayCard(term),
-              "notes": lambda: NotesCard(term)}
-    dock = {}
+              "notes": lambda: NotesCard(term), "tests": lambda: TestsCard(term, qbar)}
+    dock, dock_geo, dock_card = {}, {}, {}
     for key, dx, dy, dw in plan_dock(L, wanted, specs):
         card = makers[key]()
         card.set_width(dw)
@@ -5739,6 +5898,9 @@ def main():
         if key == "notes":                    # a plain box: its window paints the card behind it
             dwin.connect("draw", lambda _w, cr, c=card: (card_bg(cr, 0, 0, c.W, c.H, 20), False)[-1])
         dock[key] = dwin
+        dock_geo[key] = (dx, dy, dw)
+        dock_card[key] = card
+    DOCK_ACTIVE.update(dock)
     icons = IconsGrid(term)
     w4 = make_window("Kiln Icons", icons, g.x + L["icons"][0], g.y + L["icons"][1], ICONS_W, ICONS_H)
     launcher = Launcher(term, icons)
@@ -5756,6 +5918,19 @@ def main():
     # ---- modes: Overview (everything), Coding (terminal beside the cards), Focus (terminal only)
     wins = dict(cards=w1, term=w2, focus=w3, music=w5, bar=w6, icons=w4)
     wins.update({f"dock_{k}": w for k, w in dock.items()})
+
+    # Focus mode: a veil that dims the wallpaper, and the Pomodoro timer as a pill in the terminal header
+    veil_area = Gtk.DrawingArea()
+    veil_area.set_size_request(g.width, g.height)
+    veil_area.connect("draw", lambda _w, cr: (cr.set_source_rgba(0, 0, 0, 0.55), cr.paint(), False)[-1])
+    veil_win = make_window("Kiln Veil", veil_area, g.x, g.y, g.width, g.height)
+    veil_win.set_accept_focus(False)
+
+    def hud():
+        left = max(0.0, focus.end_at - time.time()) if focus.running else focus.left
+        m, sec = divmod(int(left), 60)
+        return f"{'●' if focus.running else '▶'}  {m}:{sec:02d}", focus.running
+    GLib.timeout_add_seconds(1, lambda: (term.head.queue_draw() if term.hud else None, True)[1])
     ex = L["extra"]
     state = {"mode": "overview"}
 
@@ -5789,23 +5964,51 @@ def main():
         name = name if name in MODES else "overview"
         state["mode"] = name
         top, gap, bar_y, left = ex["top"], ex["gap"], ex["bar_y"], ex["left"]
+        side = [k for k in ("git", "tests", "notes") if k in dock]       # the project's own cards
+        arrange = {}                                                     # dock card -> (x, y, w, h)
+        veil = False
+        term.alpha, pt = 0.80, 11
         if name == "coding":
             tx = left + CARDS_W + gap
-            tw, th = min(ex["W"] - tx - ex["right"], 2000), bar_y - gap - top
+            avail = ex["W"] - tx - ex["right"]
+            tw, th = min(avail, 2000), bar_y - gap - top
             ty, show = top, {"cards", "term", "bar"}
+            if side and avail >= 1500:                                   # Git, Tests and Notes beside the terminal
+                tw = max(1100, int(avail * 0.60))
+                cx, cw = tx + tw + gap, avail - tw - gap
+                ch = (th - gap * (len(side) - 1)) // len(side)
+                for i, key in enumerate(side):
+                    arrange[key] = (cx, top + i * (ch + gap), cw, ch)
+                show |= {f"dock_{k}" for k in side}
         elif name == "focus":
             tw, th = min(1700, int(ex["W"] * 0.62)), min(bar_y - gap - top, 940)
             tx, ty = (ex["W"] - tw) // 2, top + (bar_y - gap - top - th) // 2
-            show = {"term", "bar"}
+            show, veil, term.alpha, pt = {"term", "bar"}, True, 0.97, 13
         else:
             (tx, ty), (tw, th) = L["term"], ex["term0"]
             show = set(wins)
         term.set_size(tw, th)
+        term.set_font_pt(pt)
         place(w2, tx, ty, tw, th)
         w2.set_visible("term" in show)
+        w2.queue_draw()
+        for key, dwin in dock.items():                                   # cards go back to their own spots
+            card = dock_card[key]
+            ox, oy, ow = dock_geo[key]
+            x, y, w_, h_ = arrange.get(key, (ox, oy, ow, DockCard.H))
+            card.set_width(w_)
+            card.set_height(h_)
+            place(dwin, x, y, w_, h_)
         for key, win in wins.items():
             if key != "term":
                 win.set_visible(key in show)
+        veil_win.set_visible(veil)
+        if veil:                                                         # dim the wallpaper, keep the terminal on top
+            veil_win.get_window().lower()
+            w2.get_window().raise_()
+            w6.get_window().raise_()
+        term.hud, term.on_hud = (hud, focus.toggle) if name == "focus" else (None, None)
+        term.head.queue_draw()
         qbar.mode = name
         qbar.queue_draw()
         set_banners(name == "focus")

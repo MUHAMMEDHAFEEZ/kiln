@@ -9,6 +9,10 @@
 * Desktop icons: a dot for recently changed items and "Group icons by type".
 * Dock cards for big screens: Git, System, Running, Today (calendar, Hijri date, prayer times) and Notes,
   placed in the free space beside the terminal.
+* Tests card (status, run button, log tail, project scripts as a fallback); the Running card is now optional.
+* Overview: the clock card shows the Hijri date and next prayer instead of CPU/RAM.
+* Coding mode: Git, Tests and Notes stacked beside a wide terminal.
+* Focus mode: dimmed screen, solid terminal in larger type, timer pill in the header.
 
 ## 1.0.0 (2026-10-21)
 
