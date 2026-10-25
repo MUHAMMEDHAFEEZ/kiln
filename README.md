@@ -1,10 +1,9 @@
 <div align="center">
 
-# Kiln
+<img src="docs/brand/banner.png" alt="Kiln: a warm, work-focused desktop for GNOME" width="100%">
 
-**A warm, work-focused desktop for GNOME.**
-Live cards for your day, a real terminal on the wallpaper, a work bar that knows what you are building,
-and a lock screen that is actually useful, all in eight paper-cut themes.
+**Live cards for your day, a real terminal on the wallpaper, a work bar that knows what you are building,
+and a lock screen that is actually useful, all in eight paper-cut themes.**
 
 ![The eight Kiln themes](docs/screenshots/themes.jpg)
 

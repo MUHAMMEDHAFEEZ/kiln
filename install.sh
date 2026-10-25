@@ -112,6 +112,10 @@ fi
 # ------------------------------------------------------------------ app menu entry + icon
 mkdir -p "$HOME/.local/share/applications" "$HOME/.local/share/icons/hicolor/scalable/apps"
 install -m 644 "$SHARE/desktop/kiln.svg" "$HOME/.local/share/icons/hicolor/scalable/apps/kiln.svg"
+for px in 16 22 24 32; do      # the 2-layer mark is clearer at small sizes
+  mkdir -p "$HOME/.local/share/icons/hicolor/${px}x${px}/apps"
+  install -m 644 "$SHARE/desktop/icons/$px.png" "$HOME/.local/share/icons/hicolor/${px}x${px}/apps/kiln.png"
+done
 cat > "$HOME/.local/share/applications/kiln-settings.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application

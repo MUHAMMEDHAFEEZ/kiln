@@ -19,7 +19,7 @@ say() { printf '\033[38;2;217;119;87m==>\033[0m %s\n' "$*"; }
 say "Stopping the widgets"
 systemctl --user stop kiln 2>/dev/null
 rm -f "$HOME/.config/autostart/kiln.desktop" "$HOME/.local/share/applications/kiln-settings.desktop" \
-      "$HOME/.local/share/icons/hicolor/scalable/apps/kiln.svg"
+      "$HOME/.local/share/icons/hicolor/scalable/apps/kiln.svg" "$HOME"/.local/share/icons/hicolor/*/apps/kiln.png
 
 say "Removing the shell extension and the Super+K shortcut"
 gnome-extensions disable "$UUID" 2>/dev/null
