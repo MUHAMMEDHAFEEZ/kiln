@@ -24,6 +24,10 @@ All settings live in **`~/.config/kiln/config.json`**. Open it with `kiln config
   "now_playing": { "youtube_music_only": false },
   "lock_screen": { "widgets": true, "brightness": 0.72, "blur": 0 },
 
+  "terminal": { "project_commands": true },
+  "modes": { "focus_mutes_notifications": true },
+  "icons": { "recent_dot": true, "recent_hours": 48 },
+
   "integrations": { "github": true, "lark": false, "claude_code": true },
   "theme_apply": { "gtk": true, "dock": true, "gnome_terminal": true, "wallpaper": true }
 }
@@ -61,6 +65,20 @@ They are calculated on your machine and follow your system's time zone and dayli
 | Key | Default | Meaning |
 |---|---|---|
 | `now_playing.youtube_music_only` | `false` | Show only YouTube Music: the [Pear Desktop](https://github.com/pear-devs/pear-desktop) app (`youtube-music`), or a browser tab on music.youtube.com. VLC, YouTube videos and other players are ignored. The card's *Open YouTube Music* button starts the desktop app when it is installed. |
+
+## Terminal, modes and icons
+
+| Key | Default | Meaning |
+|---|---|---|
+| `terminal.project_commands` | `true` | The buttons under the terminal come from the project shown in the work bar (git, plus its `package.json` scripts, Makefile targets, `manage.py`, Cargo, Go, Flutter...), followed by your own `quick-commands.txt`. `false` shows only `quick-commands.txt`. |
+| `modes.focus_mutes_notifications` | `true` | Focus mode turns notification banners off and puts your previous setting back when you leave it (also after a crash or a restart). |
+| `icons.recent_dot` | `true` | A dot on desktop items changed within `recent_hours`. A folder also counts when a project inside it has a recent commit. |
+| `icons.recent_hours` | `48` | How long an item counts as recent. |
+
+Tests: the **tests** button in the work bar runs the project's test command through your login shell
+(so tools from `nvm` or a virtualenv are found), with `CI=true`, for up to 15 minutes. The output is
+saved in `~/.cache/kiln/test-<project>.log` (right-click the button to see it). Click it only on
+projects whose tests are safe to run on this machine.
 
 ## Lock screen
 

@@ -10,7 +10,9 @@ CONF="$HOME/.config/kiln"
 CACHE="$HOME/.cache/kiln"
 UUID="kiln-shell@local"
 EXT="$HOME/.local/share/gnome-shell/extensions/$UUID"
-KEYPATH="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/kiln-search/"
+KEYBASE="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings"
+KEYPATH="$KEYBASE/kiln-search/"
+KEYPATH2="$KEYBASE/kiln-mode/"
 PURGE=0
 [ "${1:-}" = "--purge" ] && PURGE=1
 
@@ -29,10 +31,12 @@ gsettings set org.gnome.shell enabled-extensions "$exts"
 rm -rf "$EXT"
 MK=org.gnome.settings-daemon.plugins.media-keys
 list="$(gsettings get $MK custom-keybindings)"
-list="$(echo "$list" | sed -e "s|, *'$KEYPATH'||" -e "s|'$KEYPATH', *||" -e "s|'$KEYPATH'||")"
+for kp in "$KEYPATH" "$KEYPATH2"; do
+  list="$(echo "$list" | sed -e "s|, *'$kp'||" -e "s|'$kp', *||" -e "s|'$kp'||")"
+  dconf reset -f "$kp"
+done
 [ "$list" = "[]" ] && list="@as []"
 gsettings set $MK custom-keybindings "$list"
-dconf reset -f "$KEYPATH"
 
 if [ -d "$CONF/.restore" ]; then
   say "Restoring your previous GNOME settings"

@@ -20,7 +20,9 @@ CACHE="$HOME/.cache/kiln"
 BIN="$HOME/.local/bin"
 UUID="kiln-shell@local"
 EXT="$HOME/.local/share/gnome-shell/extensions/$UUID"
-KEYPATH="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/kiln-search/"
+KEYBASE="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings"
+KEYPATH="$KEYBASE/kiln-search/"
+KEYPATH2="$KEYBASE/kiln-mode/"
 
 INSTALL_DEPS=0 KEEP_DING=0 CLAUDE_HOOK=0 APPLY=1 GUI=1
 for a in "$@"; do
@@ -103,6 +105,13 @@ if [ -d "$OLD" ] && [ ! -e "$CONF/.migrated" ]; then
   [ -d "$OLD/project-todos" ] && cp -a "$OLD/project-todos/." "$CONF/project-todos/"
   [ -f "$OLD/current-theme" ] && sed 's/^paper-dark$/kiln-dark/' "$OLD/current-theme" > "$CONF/current-theme"
   systemctl --user stop violet-desktop 2>/dev/null || true
+  # the old Super+K shortcut would start the old widgets again
+  oldkey="$KEYBASE/violet-search/"
+  list="$(gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings)"
+  list="$(echo "$list" | sed -e "s|, *'$oldkey'||" -e "s|'$oldkey', *||" -e "s|'$oldkey'||")"
+  [ "$list" = "[]" ] && list="@as []"
+  gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "$list"
+  dconf reset -f "$oldkey"
   gnome-extensions disable violet-panel@local 2>/dev/null || true
   [ -f "$HOME/.config/autostart/violet-desktop.desktop" ] && \
     mv "$HOME/.config/autostart/violet-desktop.desktop" "$CONF/.restore/violet-desktop.desktop.old"
@@ -144,17 +153,23 @@ X-GNOME-Autostart-Delay=3
 NoDisplay=true
 EOF
 
-# Super+K opens the launcher (added next to any custom shortcuts you already have)
+# Super+K opens the launcher, Super+J cycles Overview / Coding / Focus (added next to your own shortcuts)
 MK=org.gnome.settings-daemon.plugins.media-keys
-list="$(gsettings get $MK custom-keybindings)"
-if [[ "$list" != *"$KEYPATH"* ]]; then
-  if [[ "$list" == "@as []" || "$list" == "[]" ]]; then list="['$KEYPATH']"; else list="${list%]}, '$KEYPATH']"; fi
-  gsettings set $MK custom-keybindings "$list"
-fi
+for kp in "$KEYPATH" "$KEYPATH2"; do
+  list="$(gsettings get $MK custom-keybindings)"
+  if [[ "$list" != *"$kp"* ]]; then
+    if [[ "$list" == "@as []" || "$list" == "[]" ]]; then list="['$kp']"; else list="${list%]}, '$kp']"; fi
+    gsettings set $MK custom-keybindings "$list"
+  fi
+done
 KB="$MK.custom-keybinding:$KEYPATH"
 gsettings set "$KB" name "Kiln search"
 gsettings set "$KB" command "$SHARE/search.sh"
 gsettings set "$KB" binding "<Super>k"
+KB2="$MK.custom-keybinding:$KEYPATH2"
+gsettings set "$KB2" name "Kiln mode"
+gsettings set "$KB2" command "$BIN/kiln mode next"
+gsettings set "$KB2" binding "<Super>j"
 
 # Desktop Icons NG draws a full-screen window over the widgets and swallows their clicks
 if [ $KEEP_DING = 0 ] && gnome-extensions info ding@rastersoft.com 2>/dev/null | grep -q "State: ACTIVE"; then
@@ -194,7 +209,7 @@ cat <<EOF
   Kiln is installed.
   • Log out and back in once so GNOME loads the new top bar and lock screen.
   • Open "Kiln Settings" from the app menu (or run 'kiln settings') to pick a theme and set it up.
-  • Super+K opens the launcher.  'kiln theme' lists the themes.  'kiln doctor' checks everything.
+  • Super+K opens the launcher. Super+J switches Overview / Coding / Focus.  'kiln theme' lists the themes.  'kiln doctor' checks everything.
   • Settings: $CONF/config.json   (docs/CONFIGURATION.md explains each one)
   • Remove it any time with ./uninstall.sh
 

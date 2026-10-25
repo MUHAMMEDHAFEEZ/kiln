@@ -22,11 +22,12 @@ and a lock screen that is actually useful, all in eight paper-cut themes.**
 | **GitHub** | Notifications, your open pull requests with CI status, review requests and a 6-month contribution heatmap (through the `gh` CLI). |
 | **Projects** | Your most recently touched git repositories, with language and uncommitted-change badges. |
 | **Agenda** | Today's meetings from Lark Calendar (optional). |
-| **Terminal** | A real terminal on the desktop, with tabs, the current git branch and one-click command buttons. |
+| **Terminal** | A real terminal on the desktop: tabs, split panes (Ctrl+Shift+E / O), the current git branch, and new tabs that open in the project you are working on. The buttons under it come from the project's own files (`package.json` scripts, Makefile, `manage.py`, Cargo, Go, Flutter...). |
 | **Focus** | A Pomodoro timer (25 / 5 min; scroll to change the length) that counts today's sessions. |
 | **Now Playing** | Any MPRIS player (Spotify, YouTube Music in a browser…), with artwork, seek bar and controls. |
-| **Work bar** | Detects the projects you have open (VS Code windows, Claude Code sessions, terminals) and lets you switch between them. It shows the branch, ahead/behind, changes, pull request and CI status, and the last commit. It also lists your running dev servers, local services and Docker containers, which you can open, stop or hide. |
-| **Desktop icons** | Folder icons in the theme's colours, with per-folder colour and symbol, drag and drop, multi-select, rename and trash. |
+| **Work bar** | Detects the projects you have open (VS Code windows, Claude Code sessions, terminals) and lets you switch between them. It shows the branch, ahead/behind, changes, pull request and CI status, the last commit, and a **tests** button that runs the project's tests and keeps the result. It also lists your running dev servers, local services and Docker containers, which you can open, stop or hide. At its right end: **Overview / Coding / Focus** modes. |
+| **Modes** | **Overview**: every card. **Coding**: the terminal grows next to the cards. **Focus**: only the terminal, centred, and notification banners are silenced until you leave. Switch from the work bar, with **Super+J**, or `kiln mode`. |
+| **Desktop icons** | Folder icons in the theme's colours, with per-folder colour and symbol, drag and drop, multi-select, rename and trash. A dot marks what changed in the last two days, and *Group icons by type* (right-click the desktop) puts project folders, other folders and files in rows of their own. |
 | **Launcher** (Super+K) | Search apps, projects, desktop items and recent files, do maths, run `>commands`, add todos and switch themes, or search the web. |
 | **Top bar** | Workspace badge and desktop name, a search pill, the date on the right, and themed menus, quick settings, notifications, OSD and Alt+Tab. |
 | **Lock screen** | A crisp wallpaper with your tasks, next meeting, GitHub and battery shown as counts only, never titles. It also has Now Playing with controls, a live Focus countdown, prayer times (12 calculation methods, offline) and day/week progress. |
@@ -89,7 +90,9 @@ Changes are saved the moment you make them. Press **Restart Kiln** to load them 
 | | |
 |---|---|
 | **Super+K** | launcher |
+| **Super+J** | switch mode: Overview, Coding, Focus |
 | **Super+D** | show the desktop, Ubuntu's shortcut (the widgets stay visible) |
+| Ctrl+Shift+E / O / W | in the terminal: split right / split down / close the pane |
 | Click the GitHub logo | refresh GitHub, projects and Lark now |
 | Right-click anything | contextual actions (open in VS Code, copy path, stop server, hide…) |
 
@@ -98,6 +101,8 @@ The `kiln` command:
 ```text
 kiln start | stop | restart | status | logs
 kiln theme                 list themes          kiln theme sepia    switch theme
+kiln mode coding           switch mode (overview | coding | focus | next)
+kiln test                  run the tests of the project shown in the work bar
 kiln todo add "Ship it"    personal list        kiln todo done 2
 kiln tasks add "Fix login" list of the project in the current folder (-C <dir> for another)
 kiln settings              open the Kiln Settings window

@@ -30,6 +30,8 @@ Lists
       cmd: ls | add <text> | done <n> | undo <n> | rm <n> | clear | path
 
 Setup
+  mode [name]              switch the desktop mode: overview | coding | focus | next
+  test                     run the tests of the project shown in the work bar
   settings                 open the Kiln Settings window
   config                   open ~/.config/kiln/config.json
   doctor                   check dependencies and the installation
@@ -108,6 +110,10 @@ case "$cmd" in
     [ -d "$dir" ] || die "no such folder: $dir"
     f="$(project_file "$dir")"
     list_cmd "$f" "$(basename "$f" .txt):" "$@" ;;
+  mode)
+    mkdir -p "$CACHE"
+    if [ -z "${1:-}" ]; then cat "$CACHE/mode" 2>/dev/null || echo overview; else echo "mode $1" >> "$CACHE/cmd"; fi ;;
+  test) mkdir -p "$CACHE"; echo "test" >> "$CACHE/cmd" ;;
   settings) setsid /usr/bin/python3 "$SHARE/settings.py" "$@" >/dev/null 2>&1 & ;;
   config)  [ -f "$CONF/config.json" ] || die "no config yet, run ./install.sh"; xdg-open "$CONF/config.json" >/dev/null 2>&1 & ;;
   doctor)  doctor ;;

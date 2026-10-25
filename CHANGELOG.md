@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+* Terminal: split panes, new tabs open in the current project, and the buttons under it come from the
+  project's own files.
+* Work bar: a tests button (run, result, output), and Overview / Coding / Focus modes with
+  `Super+J`, `kiln mode` and `kiln test`.
+* Desktop icons: a dot for recently changed items and "Group icons by type".
+
 ## 1.0.0 (2026-10-21)
 
 First public release.

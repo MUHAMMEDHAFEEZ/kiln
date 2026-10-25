@@ -50,6 +50,9 @@ DEFAULT_CONFIG = {
     "web_search": {"name": "DuckDuckGo", "url": "https://duckduckgo.com/?q={q}"},
     "integrations": {"github": True, "lark": False, "claude_code": True},
     "now_playing": {"youtube_music_only": False},
+    "terminal": {"project_commands": True},
+    "modes": {"focus_mutes_notifications": True},
+    "icons": {"recent_dot": True, "recent_hours": 48},
 }
 
 
@@ -603,6 +606,146 @@ def _parse_tasks(fp):
                         tasks[tid] = dict(id=tid, subject=task.get("subject") or inp.get("subject", ""),
                                           activeForm=inp.get("activeForm", ""), status="pending")
     return list(tasks.values())
+
+
+def _py(path):
+    """The project's own Python (venv / .venv / env) if it has one."""
+    for d in ("venv", ".venv", "env"):
+        exe = os.path.join(path, d, "bin", "python")
+        if os.path.exists(exe):
+            return shlex.quote(exe)
+    return "python3"
+
+
+def _json_file(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _make_targets(path):
+    for n in ("Makefile", "makefile", "GNUmakefile"):
+        try:
+            with open(os.path.join(path, n), encoding="utf-8", errors="replace") as f:
+                return re.findall(r"^([A-Za-z0-9][A-Za-z0-9_.-]*)\s*:(?!=)", f.read(), re.M)
+        except OSError:
+            continue
+    return []
+
+
+def _has_pytest(path):
+    if any(os.path.exists(os.path.join(path, n)) for n in ("pytest.ini", "tox.ini", "conftest.py")):
+        return True
+    for n in ("pyproject.toml", "setup.cfg"):
+        try:
+            with open(os.path.join(path, n), encoding="utf-8", errors="replace") as f:
+                if "pytest" in f.read():
+                    return True
+        except OSError:
+            pass
+    for d in ("tests", "test"):
+        try:
+            if any(f.endswith(".py") for f in os.listdir(os.path.join(path, d))):
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def _node_pm(path):
+    for lock, pm in (("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn"), ("bun.lockb", "bun"), ("bun.lock", "bun")):
+        if os.path.exists(os.path.join(path, lock)):
+            return pm
+    return "npm"
+
+
+_cmd_cache = {}
+_STAMP_FILES = ("package.json", "Makefile", "pyproject.toml", "manage.py", "Cargo.toml", "go.mod", "pubspec.yaml",
+                "docker-compose.yml", "docker-compose.yaml", "compose.yaml", "pom.xml", "pytest.ini")
+
+
+def _stamp(path):
+    out = []
+    for n in _STAMP_FILES:
+        try:
+            out.append(os.path.getmtime(os.path.join(path, n)))
+        except OSError:
+            out.append(0)
+    return tuple(out)
+
+
+def project_commands(path):
+    """(label, command) pairs worth a button for the project in `path`, read from its own files."""
+    key = ("cmds", path)
+    st = _stamp(path)
+    if _cmd_cache.get(key, (None,))[0] == st:
+        return _cmd_cache[key][1]
+    out = []
+
+    def add(label, cmd=None):
+        cmd = cmd or label
+        if all(c != cmd for _l, c in out):
+            out.append((label, cmd))
+    pkg = _json_file(os.path.join(path, "package.json"))
+    if isinstance(pkg, dict) and isinstance(pkg.get("scripts"), dict):
+        pm = _node_pm(path)
+        for sc in ("dev", "start", "serve", "build", "test", "lint"):
+            body = pkg["scripts"].get(sc)
+            if isinstance(body, str) and "no test specified" not in body:
+                add(f"{pm} run {sc}" if pm == "npm" else f"{pm} {sc}")
+    if os.path.exists(os.path.join(path, "manage.py")):
+        py = _py(path)
+        for sub in ("runserver", "test", "migrate"):
+            add(f"manage.py {sub}", f"{py} manage.py {sub}")
+    elif _has_pytest(path):
+        add("pytest", f"{_py(path)} -m pytest -q")
+    targets = _make_targets(path)
+    for t in ("run", "dev", "serve", "up", "build", "test", "lint"):
+        if t in targets:
+            add(f"make {t}")
+    if any(os.path.exists(os.path.join(path, n)) for n in ("docker-compose.yml", "docker-compose.yaml", "compose.yaml")):
+        add("docker compose up")
+    if os.path.exists(os.path.join(path, "Cargo.toml")):
+        add("cargo run")
+        add("cargo test")
+    if os.path.exists(os.path.join(path, "go.mod")):
+        add("go run .")
+        add("go test ./...")
+    if os.path.exists(os.path.join(path, "pubspec.yaml")):
+        add("flutter run")
+        add("flutter test")
+    if os.path.exists(os.path.join(path, "pom.xml")):
+        add("mvn test")
+    if os.path.exists(os.path.join(path, "gradlew")):
+        add("gradlew build", "./gradlew build")
+    res = out[:6]
+    _cmd_cache[key] = (st, res)
+    return res
+
+
+def test_command(path):
+    """The command that runs this project's tests, or None."""
+    if os.path.exists(os.path.join(path, "manage.py")):
+        return f"{_py(path)} manage.py test"
+    pkg = _json_file(os.path.join(path, "package.json"))
+    if isinstance(pkg, dict) and isinstance(pkg.get("scripts"), dict):
+        body = pkg["scripts"].get("test")
+        if isinstance(body, str) and "no test specified" not in body:
+            pm = _node_pm(path)
+            return "npm test" if pm == "npm" else f"{pm} test"
+    if _has_pytest(path):
+        return f"{_py(path)} -m pytest -q"
+    for f, cmd in (("Cargo.toml", "cargo test"), ("go.mod", "go test ./..."), ("pubspec.yaml", "flutter test"),
+                   ("pom.xml", "mvn -q test")):
+        if os.path.exists(os.path.join(path, f)):
+            return cmd
+    if "test" in _make_targets(path):
+        return "make test"
+    if os.path.exists(os.path.join(path, "gradlew")):
+        return "./gradlew test"
+    return None
 
 
 WORK = dict(proj=None)      # the project the bottom bar is showing (set by WorkBar)
@@ -1567,6 +1710,7 @@ class TerminalCard(Gtk.Box):
                                 "git status", "git pull", "npm run dev", "docker ps", "code ."])
         self.new_tab(os.path.expanduser("~/Desktop"))
         GLib.timeout_add_seconds(1, self.poll_cwd)
+        self._first_dir = True
 
     def _area(self, h, draw, press, motion):
         a = Gtk.DrawingArea()
@@ -1616,32 +1760,67 @@ class TerminalCard(Gtk.Box):
         t.connect("button-press-event", self.on_term_button)
         return t
 
+    def set_size(self, w, h):
+        """Resize the card (the window is resized by the caller). The strips draw to self.W."""
+        self.W, self.H = w, h
+        self.head.set_size_request(300, self.HEAD)
+        self.foot.set_size_request(300, self.FOOT)
+        self.head.queue_draw()
+        self.foot.queue_draw()
+        self.queue_resize()
+
+    def default_dir(self):
+        """New tabs open in the project being worked on (the work bar knows it)."""
+        proj = WORK.get("proj")
+        if proj and os.path.isdir(proj["path"]):
+            return proj["path"]
+        return os.path.expanduser("~/Desktop")
+
     def new_tab(self, path=None):
-        path = path or os.path.expanduser("~/Desktop")
+        path = path or self.default_dir()
         t = self.make_term()
-        tab = dict(term=t, pid=None, cwd=path, start=path)
-        t.connect("child-exited", lambda _t, _st, tab=tab: GLib.timeout_add(200, self.on_exit, tab))
+        pane = dict(term=t, pid=None)
+        tab = dict(term=t, pid=None, cwd=path, start=path, root=t, panes=[pane], name=f"tab{id(t)}")
+        self._hook(tab, pane)
         self.tabs.append(tab)
-        self.stack.add_named(t, str(id(t)))
+        self.stack.add_named(t, tab["name"])
         t.show_all()
-        self.spawn(tab)
+        self.spawn(tab, pane)
         self.switch(len(self.tabs) - 1)
         return tab
 
-    def spawn(self, tab):
-        env = [f"{k}={v}" for k, v in clean_env().items()] + ["COLORTERM=truecolor"]
-        tab["term"].spawn_async(Vte.PtyFlags.DEFAULT, tab["start"],
-                                ["/bin/bash", "--rcfile", f"{CACHE}/term.bashrc"], env,
-                                GLib.SpawnFlags.DEFAULT, None, None, -1, None,
-                                lambda _t, pid, err, *_a, tab=tab: tab.__setitem__("pid", pid if not err else None))
+    def _hook(self, tab, pane):
+        t = pane["term"]
+        t.connect("child-exited", lambda _t, _st: GLib.timeout_add(200, self.on_exit, tab, pane))
+        t.connect("focus-in-event", lambda *_: self._focused(tab, pane))
 
-    def on_exit(self, tab):
-        if tab not in self.tabs:
+    @staticmethod
+    def _focused(tab, pane):
+        tab["term"], tab["pid"] = pane["term"], pane["pid"]
+        return False
+
+    def spawn(self, tab, pane=None, start=None):
+        pane = pane or tab["panes"][0]
+        env = [f"{k}={v}" for k, v in clean_env().items()] + ["COLORTERM=truecolor"]
+
+        def done(_t, pid, err, *_a):
+            pane["pid"] = pid if not err else None
+            if tab["term"] is pane["term"]:
+                tab["pid"] = pane["pid"]
+        pane["term"].spawn_async(Vte.PtyFlags.DEFAULT, start or tab["start"],
+                                 ["/bin/bash", "--rcfile", f"{CACHE}/term.bashrc"], env,
+                                 GLib.SpawnFlags.DEFAULT, None, None, -1, None, done)
+
+    def on_exit(self, tab, pane=None):
+        pane = pane or (tab["panes"][0] if tab["panes"] else None)
+        if tab not in self.tabs or pane not in tab["panes"]:
             return False
-        if len(self.tabs) == 1:
-            tab["term"].reset(True, True)
-            tab["start"] = tab["cwd"] if os.path.isdir(tab["cwd"]) else os.path.expanduser("~/Desktop")
-            self.spawn(tab)
+        if len(tab["panes"]) > 1:
+            self.close_pane(tab, pane, kill=False)
+        elif len(self.tabs) == 1:
+            pane["term"].reset(True, True)
+            tab["start"] = tab["cwd"] if os.path.isdir(tab["cwd"]) else self.default_dir()
+            self.spawn(tab, pane)
         else:
             self.close_tab(self.tabs.index(tab), kill=False)
         return False
@@ -1650,12 +1829,14 @@ class TerminalCard(Gtk.Box):
         if not (0 <= i < len(self.tabs)):
             return
         tab = self.tabs.pop(i)
-        if kill and tab["pid"]:
-            try:
-                os.kill(tab["pid"], signal.SIGHUP)
-            except OSError:
-                pass
-        self.stack.remove(tab["term"])
+        if kill:
+            for pane in tab["panes"]:
+                if pane["pid"]:
+                    try:
+                        os.kill(pane["pid"], signal.SIGHUP)
+                    except OSError:
+                        pass
+        self.stack.remove(tab["root"])
         if not self.tabs:
             self.new_tab()
             return
@@ -1665,11 +1846,82 @@ class TerminalCard(Gtk.Box):
             self.active = max(0, i - 1)
         self.switch(min(self.active, len(self.tabs) - 1))
 
+    # --- panes: a tab can be split side by side or top / bottom
+    def split(self, side_by_side=True):
+        tab = self.tabs[self.active]
+        old, cwd = tab["term"], tab["cwd"]
+        t = self.make_term()
+        pane = dict(term=t, pid=None)
+        tab["panes"].append(pane)
+        self._hook(tab, pane)
+        paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL if side_by_side else Gtk.Orientation.VERTICAL)
+        parent = old.get_parent()
+        if isinstance(parent, Gtk.Paned):
+            first = parent.get_child1() is old
+            parent.remove(old)
+            (parent.pack1 if first else parent.pack2)(paned, True, False)
+        else:
+            self.stack.remove(old)
+            self.stack.add_named(paned, tab["name"])
+            tab["root"] = paned
+        paned.pack1(old, True, False)
+        paned.pack2(t, True, False)
+        state = {"done": False}
+
+        def half(p, alloc):
+            if not state["done"] and alloc.width > 20 and alloc.height > 20:
+                state["done"] = True
+                size = alloc.width if p.get_orientation() == Gtk.Orientation.HORIZONTAL else alloc.height
+                GLib.idle_add(lambda: (p.set_position(size // 2), False)[-1])
+        paned.connect("size-allocate", half)
+        paned.show_all()
+        self.stack.set_visible_child(tab["root"])
+        self.spawn(tab, pane, cwd)
+        self._focused(tab, pane)
+        t.grab_focus()
+
+    def close_focused(self):
+        tab = self.tabs[self.active]
+        if len(tab["panes"]) > 1:
+            pane = next(p for p in tab["panes"] if p["term"] is tab["term"])
+            self.close_pane(tab, pane)
+        else:
+            self.close_tab(self.active)
+
+    def close_pane(self, tab, pane, kill=True):
+        t = pane["term"]
+        parent = t.get_parent()
+        if not isinstance(parent, Gtk.Paned):
+            return
+        tab["panes"].remove(pane)
+        if kill and pane["pid"]:
+            try:
+                os.kill(pane["pid"], signal.SIGHUP)
+            except OSError:
+                pass
+        sibling = parent.get_child2() if parent.get_child1() is t else parent.get_child1()
+        grand = parent.get_parent()
+        parent.remove(t)
+        parent.remove(sibling)
+        if isinstance(grand, Gtk.Paned):
+            first = grand.get_child1() is parent
+            grand.remove(parent)
+            (grand.pack1 if first else grand.pack2)(sibling, True, False)
+        else:
+            self.stack.remove(parent)
+            self.stack.add_named(sibling, tab["name"])
+            tab["root"] = sibling
+        sibling.show_all()
+        if tab["term"] is t and tab["panes"]:
+            self._focused(tab, tab["panes"][-1])
+        self.stack.set_visible_child(tab["root"])
+        tab["term"].grab_focus()
+
     def switch(self, i):
         self.active = i
-        t = self.tabs[i]["term"]
-        self.stack.set_visible_child(t)
-        t.grab_focus()
+        tab = self.tabs[i]
+        self.stack.set_visible_child(tab["root"])
+        tab["term"].grab_focus()
         self._update_branch()
         self.head.queue_draw()
         self.foot.queue_draw()
@@ -1692,6 +1944,16 @@ class TerminalCard(Gtk.Box):
         self.feed(cmd + "\n")
 
     def poll_cwd(self):
+        proj = WORK.get("proj")
+        sig = proj["path"] if proj else None
+        if sig != getattr(self, "_chip_proj", None):         # the buttons follow the project
+            self._chip_proj = sig
+            self.foot.queue_draw()
+        if getattr(self, "_first_dir", False) and proj and os.path.isdir(proj["path"]):
+            self._first_dir = False
+            tab = self.tabs[0]
+            if len(self.tabs) == 1 and tab["cwd"] == os.path.expanduser("~/Desktop") and tab["pid"]:
+                self.cd(proj["path"])
         changed = False
         for tab in self.tabs:
             if not tab["pid"]:
@@ -1733,7 +1995,11 @@ class TerminalCard(Gtk.Box):
         elif mods == cs and kv in (Gdk.KEY_T, Gdk.KEY_t):
             self.new_tab(self.tabs[self.active]["cwd"])
         elif mods == cs and kv in (Gdk.KEY_W, Gdk.KEY_w):
-            self.close_tab(self.active)
+            self.close_focused()
+        elif mods == cs and kv in (Gdk.KEY_E, Gdk.KEY_e):
+            self.split(True)
+        elif mods == cs and kv in (Gdk.KEY_O, Gdk.KEY_o):
+            self.split(False)
         elif mods == Gdk.ModifierType.CONTROL_MASK and kv == Gdk.KEY_Page_Down:
             self.switch((self.active + 1) % len(self.tabs))
         elif mods == Gdk.ModifierType.CONTROL_MASK and kv == Gdk.KEY_Page_Up:
@@ -1749,6 +2015,9 @@ class TerminalCard(Gtk.Box):
                 ("Paste", lambda: self.term.paste_clipboard()),
                 (None, None),
                 ("New tab", lambda: self.new_tab(self.tabs[self.active]["cwd"])),
+                ("Split right  (Ctrl+Shift+E)", lambda: self.split(True)),
+                ("Split down  (Ctrl+Shift+O)", lambda: self.split(False)),
+                ("Close pane / tab  (Ctrl+Shift+W)", self.close_focused),
                 ("Clear", self.clear),
             ])
             return True
@@ -1878,7 +2147,19 @@ class TerminalCard(Gtk.Box):
 
     # --- footer: quick commands + git branch
     def chips(self):
-        return [l.strip() for l in read_lines(QUICK) if l.strip() and not l.lstrip().startswith("#")][:8]
+        """(label, command) buttons under the terminal: git, the project's own commands, then yours."""
+        user = [l.strip() for l in read_lines(QUICK) if l.strip() and not l.lstrip().startswith("#")]
+        proj = WORK.get("proj")
+        if proj and (CFG.get("terminal") or {}).get("project_commands", True):
+            root = proj["path"]
+            cwd = self.tabs[self.active]["cwd"]
+            inside = cwd == root or cwd.startswith(root + "/")
+            out = [("git status", "git status"), ("git pull", "git pull")]
+            for label, cmd in project_commands(root):
+                out.append((label, cmd if inside else f"cd {shlex.quote(root)} && {cmd}"))
+            out += [(c, c) for c in user if all(c != x[0] for x in out)]
+            return out[:12]
+        return [(c, c) for c in user][:8]
 
     def on_foot_motion(self, _w, ev):
         self.set_hover(self._hit(self.fhits, ev.x, ev.y))
@@ -1896,13 +2177,13 @@ class TerminalCard(Gtk.Box):
     def on_foot_draw(self, _w, cr):
         self.fhits = []
         x = 18
-        for cmd in self.chips():
+        for label, cmd in self.chips():
             cr.save()
             lay = PangoCairo.create_layout(cr)
             fd = Pango.FontDescription("Hack")
             fd.set_absolute_size(11.5 * Pango.SCALE)
             lay.set_font_description(fd)
-            lay.set_text(cmd, -1)
+            lay.set_text(label, -1)
             lw = lay.get_pixel_size()[0]
             cr.restore()
             w = lw + 22
@@ -2411,6 +2692,74 @@ class IconsGrid(Gtk.DrawingArea):
     def ordered_sel(self):
         return [k for k in self.slots if k and k in self.sel]
 
+    # ---------------------------------------------------------- recent items + grouping
+    def _repos(self):
+        out = []
+        for line in read_lines(f"{CACHE}/projects.all"):
+            parts = line.split("|")
+            if len(parts) >= 5 and parts[0].isdigit():
+                out.append((int(parts[0]), parts[4]))
+        return out
+
+    def recent(self):
+        """Keys of the items worth a dot: changed lately, or holding a repo with a recent commit."""
+        now = time.time()
+        if now - getattr(self, "_rec_t", 0) > 60:
+            self._rec_t = now
+            conf = CFG.get("icons") or {}
+            rec = set()
+            if conf.get("recent_dot", True):
+                cutoff = now - float(conf.get("recent_hours", 48)) * 3600
+                repos = self._repos()
+                if not repos:
+                    self._rec_t = now - 55          # the project list is still being written: try again soon
+                for k, it in self.items.items():
+                    if it["kind"] == "home":
+                        continue
+                    ts = it["mtime"]
+                    if it["kind"] == "dir":
+                        ts = max([ts] + [t for t, rp in repos if rp == it["path"] or rp.startswith(it["path"] + "/")])
+                    if ts > cutoff:
+                        rec.add(k)
+            self._rec = rec
+        return self._rec
+
+    def group_icons(self, rows=True):
+        """Project folders, other folders, then files and apps; each group starts a new row
+        (or is only set off by a gap when rows would not fit). The order is saved like a drag."""
+        keys = [k for k in self.slots if k]
+        repos = [rp for _t, rp in self._repos()]
+
+        def is_project(k):
+            it = self.items[k]
+            return it["kind"] == "dir" and (it["label"].lower().endswith("projects") or
+                                            any(rp == it["path"] or rp.startswith(it["path"] + "/") for rp in repos))
+        first = [k for k in keys if is_project(k)]
+        second = [k for k in keys if k not in first and self.items[k]["kind"] in ("dir", "home")]
+        rest = [k for k in keys if k not in first and k not in second]
+        slots = []
+        for grp in (first, second, rest):
+            if not grp:
+                continue
+            if slots:
+                if rows:
+                    while len(slots) % COLS:
+                        slots.append(None)
+                else:
+                    slots.append(None)
+            slots += grp
+        if len(slots) > COLS * ROWS:
+            return self.group_icons(rows=False) if rows else False
+        self.slots = slots
+        self.save_order()
+        self.queue_draw()
+        return True
+
+    def compact_icons(self):
+        self.slots = [k for k in self.slots if k]
+        self.save_order()
+        self.queue_draw()
+
     # ---------------------------------------------------------- drawing
     def on_draw(self, _w, cr):
         cr.set_operator(cairo.OPERATOR_CLEAR)
@@ -2461,6 +2810,15 @@ class IconsGrid(Gtk.DrawingArea):
             set_rgba(cr, C["ink"], 0.14 if sel else 0.06)
             cr.fill()
         self.draw_icon(cr, it, x + (CELL_W - ICON_PX) / 2, y + 8, alpha=dim)
+        if it["key"] in self.recent():                    # touched in the last couple of days
+            cx, cy = x + (CELL_W + ICON_PX) / 2 - 1, y + 13
+            cr.new_path()
+            cr.arc(cx, cy, 6.2, 0, 2 * math.pi)
+            set_rgba(cr, C["card"], 0.95 * dim)
+            cr.fill()
+            cr.arc(cx, cy, 4.2, 0, 2 * math.pi)
+            set_rgba(cr, C["acc"], dim)
+            cr.fill()
         lay = PangoCairo.create_layout(cr)
         fd = Pango.FontDescription()
         fd.set_family(FONT)
@@ -2829,6 +3187,8 @@ class IconsGrid(Gtk.DrawingArea):
             tm.append(it)
         ti.set_submenu(tm)
         m.append(ti)
+        add("Group icons by type", self.group_icons)
+        add("Compact icons", self.compact_icons)
         add("Select all", lambda: (setattr(self, "sel", {k for k in self.slots if k}), self.queue_draw()))
         m.append(Gtk.SeparatorMenuItem())
         add("Change Background…", lambda: run(["gnome-control-center", "background"]))
@@ -3631,6 +3991,9 @@ def scan_dev():
 
 
 PIN_FILE = f"{APP}/current-project.txt"
+MODE_W = 270                       # room kept at the right end of the work bar for the mode switcher
+MODES = ("overview", "coding", "focus")
+CMD_FILE = f"{CACHE}/cmd"          # `kiln mode ...` / `kiln test` drop their request here
 
 
 def _git(path, *args, timeout=3):
@@ -3857,6 +4220,7 @@ def scan_project(path, with_pr):
         t, msg = lc.split("\t", 1)
         info["commit"], info["commit_t"] = msg, int(t)
     info["gh"] = github_url(path)
+    info["test"] = test_command(path)
     try:
         info["claude"] = claude_tasks(path) if INTEGRATIONS.get("claude_code", True) else None
     except Exception:
@@ -3906,6 +4270,12 @@ class WorkBar(Gtk.DrawingArea):
         self.servers, self.containers, self.proj, self.source = None, None, None, None
         self._busy, self._n, self._pr_t, self._pr = False, 0, 0, None
         self.opened, self.chosen, self._last_active = [], None, {}   # open projects / user's pick
+        self.mode = "overview"
+        self.on_mode = None                                           # set by main(): switches the desktop mode
+        self.tests = _json_file(f"{CACHE}/tests.json") or {}          # last test run per project
+        for v in self.tests.values():
+            if v.get("status") == "running":                          # left over from a previous session
+                v["status"] = "fail"
         self.refresh()
         GLib.timeout_add_seconds(4, self.refresh)
 
@@ -3990,6 +4360,48 @@ class WorkBar(Gtk.DrawingArea):
             WORK["proj"] = proj
         if old != (self.servers, self.containers, self.proj):
             self.queue_draw()
+        return False
+
+    def run_tests(self, path):
+        cmd = test_command(path)
+        if not cmd or self.tests.get(path, {}).get("status") == "running":
+            return
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(path))
+        log = f"{CACHE}/test-{safe}.log"
+        self.tests[path] = dict(status="running", t=time.time(), cmd=cmd, log=log)
+        self.queue_draw()
+        import threading
+
+        def work():
+            t0 = time.time()
+            status = "fail"
+            try:
+                with open(log, "w", encoding="utf-8") as lf:
+                    lf.write(f"$ {cmd}\n\n")
+                    lf.flush()
+                    proc = subprocess.Popen(["bash", "-lic", cmd], cwd=path, stdout=lf, stderr=subprocess.STDOUT,   # -i: nvm etc. live in .bashrc
+                                            stdin=subprocess.DEVNULL, start_new_session=True,
+                                            env=dict(os.environ, CI="true", NO_COLOR="1"))
+                    try:
+                        status = "pass" if proc.wait(timeout=900) == 0 else "fail"
+                    except subprocess.TimeoutExpired:
+                        os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            GLib.idle_add(self._tests_done, path, status, time.time() - t0)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _tests_done(self, path, status, dur):
+        self.tests[path] = dict(self.tests.get(path, {}), status=status, t=time.time(), dur=dur)
+        try:
+            with open(f"{CACHE}/tests.json", "w", encoding="utf-8") as f:
+                json.dump(self.tests, f)
+        except OSError:
+            pass
+        ok = status == "pass"
+        run(["notify-send", "-a", "Kiln", "-i", "emblem-ok-symbolic" if ok else "dialog-warning-symbolic",
+             "Tests passed" if ok else "Tests failed", f"{os.path.basename(path)} · {dur:.0f}s"])
+        self.queue_draw()
         return False
 
     def hide(self, name):
@@ -4083,6 +4495,10 @@ class WorkBar(Gtk.DrawingArea):
             return False
         kind, it = key
         p = self.proj
+        if kind == "mode":
+            if ev.button == 1 and self.on_mode:
+                self.on_mode(it)
+            return True
         if kind == "pick":
             if ev.button == 1:
                 self.chosen = it
@@ -4111,6 +4527,20 @@ class WorkBar(Gtk.DrawingArea):
             return True
         if kind == "pr":
             run(["xdg-open", it["url"]])
+            return True
+        if kind == "test":
+            path = it["path"]
+            if ev.button == 1:
+                self.run_tests(path)
+            else:
+                t = self.tests.get(path, {})
+                items = [("Run the tests", lambda: self.run_tests(path)),
+                         ("Run them in a terminal tab", lambda: self._in_tab(path, it["test"]))]
+                if t.get("log") and os.path.exists(t["log"]):
+                    items.append(("Show the last output", lambda: self._in_tab(
+                        path, f"less -R +G {shlex.quote(t['log'])}")))
+                items += [(None, None), ("Copy the command", lambda: copy_text(it["test"]))]
+                popup_menu(ev, items)
             return True
         url = f"http://localhost:{it['port']}" if kind == "srv" else \
             (f"http://localhost:{it['ports'][0]}" if it["ports"] else None)
@@ -4193,6 +4623,32 @@ class WorkBar(Gtk.DrawingArea):
             text(cr, tail, x + 26 + hw + 8, 30, 12, C["dim"], maxw=190)
         return w
 
+    def draw_modes(self, cr, Wf):
+        """Overview | Coding | Focus, at the right end of the bar."""
+        labels = [("overview", "Overview"), ("coding", "Coding"), ("focus", "Focus")]
+        widths = [self._measure(cr, lb, 12.5) + 22 for _k, lb in labels]
+        x0 = Wf - 14 - sum(widths) - 4
+        rrect(cr, x0 - 4, 9, sum(widths) + 8, 32, 16)
+        set_rgba(cr, C["ink"], 0.06)
+        cr.fill()
+        vline(cr, x0 - 14, 12, 38)
+        x = x0
+        for (key, lb), w in zip(labels, widths):
+            on = self.mode == key
+            hot = self.hover == ("mode", key)
+            if on:
+                rrect(cr, x, 12, w, 26, 13)
+                set_rgba(cr, C["acc"], 1)
+                cr.fill()
+            elif hot:
+                rrect(cr, x, 12, w, 26, 13)
+                set_rgba(cr, C["ink"], 0.10)
+                cr.fill()
+            text(cr, lb, x + w / 2, 30, 12.5, C["on_acc"] if on else (C["text"] if hot else C["dim"]),
+                 align="c", bold=on)
+            self.hits.append(((x, 9, w, 32), ("mode", key)))
+            x += w
+
     def draw_project(self, cr, x, limit):
         p = self.proj
         if not p:
@@ -4252,6 +4708,18 @@ class WorkBar(Gtk.DrawingArea):
             lw = text(cr, label, x + 30, 30, 12.5, C["acc"], mono=True)
             text(cr, ci[0], x + 30 + lw + 8, 30, 12, ci[1])
             x += w + 8
+        # tests: one click runs them, the result stays on the chip
+        if p.get("test"):
+            tr = self.tests.get(p["path"], {})
+            stt = tr.get("status")
+            word = {"running": "testing…", "pass": f"tests passed · {since(tr.get('t', 0))}",
+                    "fail": f"tests failed · {since(tr.get('t', 0))}"}.get(stt, "run tests")
+            col = {"running": C["amber"], "pass": C["mint"], "fail": C["red"]}.get(stt, C["dim"])
+            w = 26 + self._measure(cr, word, 12.5) + 12
+            self._box(cr, x, w, ("test", p))
+            self._dot(cr, x + 14, col, filled=stt is not None)
+            text(cr, word, x + 26, 30, 12.5, C["text"] if stt else C["dim"])
+            x += w + 8
         # last commit (takes what is left)
         if p.get("commit"):
             when = since(p["commit_t"])
@@ -4270,8 +4738,10 @@ class WorkBar(Gtk.DrawingArea):
         cr.paint()
         cr.set_operator(cairo.OPERATOR_OVER)
         self.hits = []
-        W, H = self.W, self.H
-        card_bg(cr, 0, 0, W, H, 16)
+        Wf, H = self.W, self.H
+        card_bg(cr, 0, 0, Wf, H, 16)
+        self.draw_modes(cr, Wf)
+        W = Wf - MODE_W                                  # everything else lives left of the mode switcher
 
         # the running section is sized first, from the right edge, so the project gets the rest
         servers = self.servers or []
@@ -4374,7 +4844,7 @@ def build_css():
 CSS = build_css()
 
 
-def make_window(title, child, x, y, w, h, focus=False):
+def make_window(title, child, x, y, w, h, focus=False, resizable=False):
     win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
     win.set_title(title)
     win.get_style_context().add_class("kiln")
@@ -4383,7 +4853,7 @@ def make_window(title, child, x, y, w, h, focus=False):
     if vis:
         win.set_visual(vis)
     win.set_decorated(False)
-    win.set_resizable(False)
+    win.set_resizable(resizable)
     win.set_default_size(w, h)
     win.set_accept_focus(True)
     win.set_skip_taskbar_hint(True)
@@ -4394,7 +4864,8 @@ def make_window(title, child, x, y, w, h, focus=False):
     win.move(x, y)
     win.connect("draw", lambda wd, cr: (cr.set_operator(cairo.OPERATOR_CLEAR), cr.paint(),
                                           cr.set_operator(cairo.OPERATOR_OVER), False)[-1])
-    win.connect("map-event", lambda wd, *_: (wd.move(x, y), wd.stick(), False)[-1])
+    win._pos = (x, y)                # modes move windows; a re-shown window goes to its current spot
+    win.connect("map-event", lambda wd, *_: (wd.move(*wd._pos), wd.stick(), False)[-1])
     return win
 
 
@@ -4424,7 +4895,8 @@ def compute_layout(g, wa):
     TerminalCard.W, TerminalCard.H = term_w, term_h
     WorkBar.W = W - left - right
     return dict(cards=(left, top), term=(left, term_y), focus=(focus_x, side_y), music=(music_x, side_y),
-                bar=(left, bar_y), icons=(ICONS_X, ICONS_Y))
+                bar=(left, bar_y), icons=(ICONS_X, ICONS_Y),
+                extra=dict(gap=gap, right=right, bar_y=bar_y, top=top, left=left, W=W, H=H, term0=(term_w, term_h)))
 
 
 def main():
@@ -4459,13 +4931,14 @@ def main():
 
     w1 = make_window("Kiln Cards", cards, g.x + L["cards"][0], g.y + L["cards"][1], CARDS_W, CARDS_H)
     # terminal window paints its own rounded card behind the (transparent) VTE
-    w2 = make_window("Kiln Terminal", term, g.x + L["term"][0], g.y + L["term"][1], TerminalCard.W, TerminalCard.H)
+    w2 = make_window("Kiln Terminal", term, g.x + L["term"][0], g.y + L["term"][1], TerminalCard.W, TerminalCard.H,
+                     resizable=True)
 
     def paint_term_bg(_w, cr):
         cr.set_operator(cairo.OPERATOR_CLEAR)
         cr.paint()
         cr.set_operator(cairo.OPERATOR_OVER)
-        card_bg(cr, 0, 0, TerminalCard.W, TerminalCard.H, 20, 0.80)
+        card_bg(cr, 0, 0, term.W, term.H, 20, 0.80)
         return False
 
     # make_window already connected a clearing handler; ours runs after and paints the card
@@ -4489,7 +4962,99 @@ def main():
         w.connect("key-press-event", ctrl_k)
     GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR1, lambda: (launcher.toggle(), True)[1])
 
+    # ---- modes: Overview (everything), Coding (terminal beside the cards), Focus (terminal only)
+    wins = dict(cards=w1, term=w2, focus=w3, music=w5, bar=w6, icons=w4)
+    ex = L["extra"]
+    state = {"mode": "overview"}
+
+    def set_banners(on):
+        """Focus mode silences notification banners; the previous setting is restored afterwards."""
+        saved = f"{CACHE}/banners-saved"
+        schema = ["org.gnome.desktop.notifications", "show-banners"]
+        if not on:
+            if os.path.exists(saved):
+                prev = open(saved, encoding="utf-8").read().strip() or "true"
+                run(["gsettings", "set", *schema, prev])
+                os.remove(saved)
+            return
+        if not (CFG.get("modes") or {}).get("focus_mutes_notifications", True) or os.path.exists(saved):
+            return
+        try:
+            cur = subprocess.run(["gsettings", "get", *schema], capture_output=True, text=True, timeout=3).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return
+        with open(saved, "w", encoding="utf-8") as f:
+            f.write(cur)
+        run(["gsettings", "set", *schema, "false"])
+
+    def place(win, x, y, w=None, h=None):
+        win._pos = (g.x + x, g.y + y)
+        win.move(*win._pos)
+        if w:
+            win.resize(w, h)
+
+    def apply_mode(name, remember=True):
+        name = name if name in MODES else "overview"
+        state["mode"] = name
+        top, gap, bar_y, left = ex["top"], ex["gap"], ex["bar_y"], ex["left"]
+        if name == "coding":
+            tx = left + CARDS_W + gap
+            tw, th = min(ex["W"] - tx - ex["right"], 2000), bar_y - gap - top
+            ty, show = top, {"cards", "term", "bar"}
+        elif name == "focus":
+            tw, th = min(1700, int(ex["W"] * 0.62)), min(bar_y - gap - top, 940)
+            tx, ty = (ex["W"] - tw) // 2, top + (bar_y - gap - top - th) // 2
+            show = {"term", "bar"}
+        else:
+            (tx, ty), (tw, th) = L["term"], ex["term0"]
+            show = set(wins)
+        term.set_size(tw, th)
+        place(w2, tx, ty, tw, th)
+        w2.set_visible("term" in show)
+        for key, win in wins.items():
+            if key != "term":
+                win.set_visible(key in show)
+        qbar.mode = name
+        qbar.queue_draw()
+        set_banners(name == "focus")
+        if remember:
+            try:
+                with open(f"{CACHE}/mode", "w", encoding="utf-8") as f:
+                    f.write(name)
+            except OSError:
+                pass
+        if name != "overview":
+            term.term.grab_focus()
+
+    qbar.on_mode = apply_mode
+
+    def on_request(*_):
+        try:
+            with open(CMD_FILE, encoding="utf-8") as f:
+                lines = f.read().splitlines()
+            os.remove(CMD_FILE)
+        except OSError:
+            return False
+        for line in lines:
+            words = line.split()
+            if not words:
+                continue
+            if words[0] == "mode":
+                want = words[1] if len(words) > 1 else "next"
+                if want == "next":
+                    want = MODES[(MODES.index(state["mode"]) + 1) % len(MODES)]
+                apply_mode(want)
+            elif words[0] == "test" and qbar.proj:
+                qbar.run_tests(qbar.proj["path"])
+        return False
+    try:
+        cmd_mon = Gio.File.new_for_path(CMD_FILE).monitor_file(Gio.FileMonitorFlags.NONE, None)
+        cmd_mon.connect("changed", lambda *_: GLib.timeout_add(150, on_request))
+    except GLib.Error:
+        pass
+
     def on_stop(signame):
+        set_banners(False)
         print(f"kiln: received {signame}, exiting", flush=True)
         Gtk.main_quit()
         return False
@@ -4498,6 +5063,12 @@ def main():
     for w in (w1, w2, w3, w4, w5, w6):
         w.show_all()
     cards.entry.hide()
+    try:
+        first = open(f"{CACHE}/mode", encoding="utf-8").read().strip()
+    except OSError:
+        first = "overview"
+    set_banners(False) if first != "focus" else None       # recover from a crash while in Focus
+    apply_mode(first, remember=False)
 
     def relayout_if_needed():
         m = disp.get_primary_monitor() or disp.get_monitor(0)
@@ -4536,6 +5107,7 @@ def main():
 
     cards.metrics.sample()
     GLib.timeout_add_seconds(2, tick)
+    GLib.timeout_add_seconds(60, lambda: (icons.queue_draw(), True)[1])      # keeps the "recent" dots fresh
     Gtk.main()
 
 

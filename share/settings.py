@@ -36,6 +36,9 @@ DEFAULTS = {
     "prayer": {"enabled": False, "method": "mwl", "asr": "standard", "language": "en"},
     "now_playing": {"youtube_music_only": False},
     "lock_screen": {"widgets": True, "brightness": 0.72, "blur": 0},
+    "terminal": {"project_commands": True},
+    "modes": {"focus_mutes_notifications": True},
+    "icons": {"recent_dot": True, "recent_hours": 48},
     "integrations": {"github": True, "lark": False, "claude_code": True},
     "theme_apply": {"gtk": True, "dock": True, "gnome_terminal": True, "wallpaper": True},
 }
@@ -430,6 +433,17 @@ class Settings(Gtk.Window):
         if known:
             self.search_row.set_no_show_all(True)
             self.search_row.hide()
+        box.pack_start(label("Desktop behaviour", "kiln-section"), False, False, 0)
+        box.pack_start(self.switch("terminal.project_commands", "Terminal buttons from the project",
+                                   "The buttons under the terminal come from the project's own files "
+                                   "(package.json scripts, Makefile, manage.py, Cargo, Go, Flutter...)."),
+                       False, False, 0)
+        box.pack_start(self.switch("modes.focus_mutes_notifications", "Focus mode silences notifications",
+                                   "Switch modes from the work bar, or with Super+J. Banners come back when you leave Focus."),
+                       False, False, 0)
+        box.pack_start(self.switch("icons.recent_dot", "Dot on recently changed desktop icons",
+                                   "A small dot marks folders and files changed in the last two days."),
+                       False, False, 0)
         return box
 
     # ------------------------------------------------------------ projects
