@@ -99,8 +99,9 @@ kiln config                open the settings    kiln doctor         check the in
 
 ## Known limitations
 
-* The layout is tuned for a **1920×1080** primary screen at 100% scaling. Other sizes work, but
-  the cards keep their size and position.
+* The layout is computed from your **primary monitor**: on 1920×1080 it is compact, and on bigger
+  screens (1440p, ultrawide) the terminal grows and the desktop-icon grid gets more columns and
+  rows. If you plug a different screen in, Kiln re-arranges itself a couple of seconds later.
 * Only the primary monitor gets widgets.
 * The widgets are X11 windows (through Xwayland) because GNOME has no layer-shell. That is why
   they stay put on *Show Desktop* and never appear in Alt+Tab.

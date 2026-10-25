@@ -4398,6 +4398,35 @@ def make_window(title, child, x, y, w, h, focus=False):
     return win
 
 
+def compute_layout(g, wa):
+    """Where every widget goes on the primary monitor `g` (wa = its work area without the
+    top bar and dock). Matches the original 1920x1080 layout and grows on bigger screens:
+    the terminal gets taller and wider (up to a comfortable size), the icon grid gets more
+    columns and rows, the work bar spans the whole width."""
+    global COLS, ROWS, ICONS_W, ICONS_H, ICONS_X, ICONS_Y
+    gap, right, bottom = 18, 28, 26
+    left = max(100, wa.x - g.x + 44)                # clear of the dock
+    top = max(66, wa.y - g.y + 26)                  # clear of the top bar
+    W, H = g.width, g.height
+    bar_y = H - bottom - WorkBar.H
+    row2_top = top + CARDS_H + gap
+    term_h = max(TerminalCard.H, min(720, bar_y - gap - row2_top))
+    term_y = bar_y - gap - term_h
+    side_w = FocusCard.W + gap + NowPlaying.W
+    term_w = max(TerminalCard.W, min(2200, W - left - right - side_w - gap))
+    music_x = W - right - NowPlaying.W
+    focus_x = music_x - gap - FocusCard.W
+    side_y = bar_y - gap - FocusCard.H              # focus + music sit on the work bar
+    ICONS_X, ICONS_Y = left + CARDS_W + 32, 40
+    COLS = max(6, (W - right - ICONS_X) // CELL_W)
+    ROWS = max(4, min(8, (term_y - gap - ICONS_Y) // CELL_H))     # the grid stays above the terminal
+    ICONS_W, ICONS_H = COLS * CELL_W, ROWS * CELL_H
+    TerminalCard.W, TerminalCard.H = term_w, term_h
+    WorkBar.W = W - left - right
+    return dict(cards=(left, top), term=(left, term_y), focus=(focus_x, side_y), music=(music_x, side_y),
+                bar=(left, bar_y), icons=(ICONS_X, ICONS_Y))
+
+
 def main():
     GLib.set_prgname("kiln")
     # single instance via pidfile
@@ -4411,6 +4440,10 @@ def main():
     faulthandler.register(signal.SIGUSR2, all_threads=True)
     GLib.timeout_add(1000, lambda: (faulthandler.dump_traceback_later(4), True)[1])
 
+    if Gdk.Screen.get_default() is None:
+        # no display (e.g. the session just ended): exit cleanly so systemd does not loop
+        print("kiln: no display, not starting", flush=True)
+        return 0
     prov = Gtk.CssProvider()
     prov.load_from_data(CSS)
     Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov,
@@ -4418,14 +4451,15 @@ def main():
     disp = Gdk.Display.get_default()
     mon = disp.get_primary_monitor() or disp.get_monitor(0)
     g = mon.get_geometry()
+    L = compute_layout(g, mon.get_workarea())
 
     term = TerminalCard()
     cards = Cards(term)
     focus = FocusCard()
 
-    w1 = make_window("Kiln Cards", cards, g.x + 100, g.y + 66, CARDS_W, CARDS_H)
+    w1 = make_window("Kiln Cards", cards, g.x + L["cards"][0], g.y + L["cards"][1], CARDS_W, CARDS_H)
     # terminal window paints its own rounded card behind the (transparent) VTE
-    w2 = make_window("Kiln Terminal", term, g.x + 100, g.y + 656, TerminalCard.W, TerminalCard.H)
+    w2 = make_window("Kiln Terminal", term, g.x + L["term"][0], g.y + L["term"][1], TerminalCard.W, TerminalCard.H)
 
     def paint_term_bg(_w, cr):
         cr.set_operator(cairo.OPERATOR_CLEAR)
@@ -4436,14 +4470,13 @@ def main():
 
     # make_window already connected a clearing handler; ours runs after and paints the card
     w2.connect("draw", paint_term_bg)
-    w3 = make_window("Kiln Focus", focus, g.x + 100 + TerminalCard.W + 18, g.y + 656, FocusCard.W, FocusCard.H)
+    w3 = make_window("Kiln Focus", focus, g.x + L["focus"][0], g.y + L["focus"][1], FocusCard.W, FocusCard.H)
     music = NowPlaying()
-    w5 = make_window("Kiln Music", music, g.x + g.width - 28 - NowPlaying.W, g.y + 656, NowPlaying.W, NowPlaying.H)
-    WorkBar.W = g.width - 100 - 28
+    w5 = make_window("Kiln Music", music, g.x + L["music"][0], g.y + L["music"][1], NowPlaying.W, NowPlaying.H)
     qbar = WorkBar(term)
-    w6 = make_window("Kiln Workbar", qbar, g.x + 100, g.y + 656 + TerminalCard.H + 18, WorkBar.W, WorkBar.H)
+    w6 = make_window("Kiln Workbar", qbar, g.x + L["bar"][0], g.y + L["bar"][1], WorkBar.W, WorkBar.H)
     icons = IconsGrid(term)
-    w4 = make_window("Kiln Icons", icons, g.x + ICONS_X, g.y + ICONS_Y, ICONS_W, ICONS_H)
+    w4 = make_window("Kiln Icons", icons, g.x + L["icons"][0], g.y + L["icons"][1], ICONS_W, ICONS_H)
     launcher = Launcher(term, icons)
 
     def ctrl_k(_w, ev):
@@ -4465,6 +4498,22 @@ def main():
     for w in (w1, w2, w3, w4, w5, w6):
         w.show_all()
     cards.entry.hide()
+
+    def relayout_if_needed():
+        m = disp.get_primary_monitor() or disp.get_monitor(0)
+        ng = m.get_geometry()
+        if (ng.x, ng.y, ng.width, ng.height) != (g.x, g.y, g.width, g.height):
+            print(f"kiln: screen is now {ng.width}x{ng.height}, re-laying out", flush=True)
+            # restart from outside this unit (start.sh stops the unit it would be running in)
+            run(["systemd-run", "--user", "--collect", "--quiet", f"{SHARE}/start.sh"])
+        return False
+
+    def on_monitors(*_):
+        if getattr(main, "_relayout", 0):
+            GLib.source_remove(main._relayout)
+        main._relayout = GLib.timeout_add(2500, relayout_if_needed)   # let the screens settle
+    Gdk.Screen.get_default().connect("monitors-changed", on_monitors)
+    Gdk.Screen.get_default().connect("size-changed", on_monitors)
 
     # data refresh schedule
     refresh("projects")
