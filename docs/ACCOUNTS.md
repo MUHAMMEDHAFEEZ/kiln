@@ -23,7 +23,7 @@ From a terminal: `kiln accounts` lists them, `kiln connect todoist` asks for the
 | **ClickUp** | Personal API token | Open tasks assigned to you | yes |
 | **Slack** | User token (see below) | Your reminders (`/remind me to …`) | yes |
 | **Lark** | Nothing: set up `lark-cli` once (see its page) | Tasks and meetings | yes |
-| **Lark Base** | The link of a tasks table, and optional lists (see below) | The **Tasks board** card, with a tab per list, and what you are working on in Today | no (read only) |
+| **Lark Base** | The link of a tasks table, and optional lists (see below) | The **Tasks board** (a card and a full Tasks mode) with a tab per list, and what you are working on in Today | yes, and you can add tasks and move them between statuses |
 
 Each task carries a small label with its service. Click a task to open it in the service, right-click for
 *Mark complete* and *Copy*. Tasks refresh every two minutes.
@@ -66,6 +66,12 @@ For a team's tasks table in Lark Base. Log in to `lark-cli` once with read-only 
 lark-cli auth login --scope "base:app:read base:table:read base:field:read base:record:read base:view:read"
 ```
 
+To add tasks and change their status from Kiln, allow writing once more (you approve it in the browser):
+
+```bash
+lark-cli auth login --scope "base:record:create base:record:update"
+```
+
 Then connect **Lark Base** in Settings → Accounts and paste the link of the table (the address bar while the table is open;
 it contains `/base/…` and `?table=tbl…`). Kiln adds a **Tasks** card on big screens with one tab for each list, and puts
 the tasks assigned to you that are *Ongoing* in the Today card.
@@ -82,7 +88,14 @@ Leave it empty to get one list per project plus yours. Kiln expects columns call
 *PROJECTS*, *Priority*, *Estimate Deadline* (or *End Date*) and *Departments*. If yours are named differently, add
 `title_field`, `status_field`, `owner_field`, `project_field`, `priority_field`, `due_field` or `dept_field` to the
 `larkbase` entry of `~/.config/kiln/accounts.json`. Done statuses are *Completed*, *Done*, *Closed* and *Complete*.
-Click a row to open it in Lark; right-click to copy.
+Click a task to open it in Lark. **Click the coloured dot** of a task to move it forward (not started → ongoing → completed;
+on a completed task it reopens it), or right-click for *Move to…*. Statuses are red (not started), yellow (ongoing) and green
+(completed). **+ New task** (on the card and on the board) opens a window for the title, project, status, priority,
+department, who it is for, a due date and a note; `kiln newtask` opens the same window, and
+`kiln newtask --title "Fix login" --list SHOP --priority Important --yes` adds a task without one.
+
+The **Tasks** mode (the last chip of the mode switcher, or `kiln mode tasks`) fills the screen with the board: three status
+columns, a card per task, a progress bar and the tabs. Ticking a Lark Base task off in the **Today** card completes it in the Base.
 
 ## Notion
 

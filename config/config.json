@@ -19,6 +19,7 @@
   "dock": { "cards": ["git", "board", "system", "day", "notes", "tests"], "position": "left" },
   "performance": "auto",
   "updates": { "mode": "notify" },
+  "cards": { "agenda": true },
   "week_start": "sun",
 
   "integrations": { "github": true, "lark": false, "claude_code": true },

@@ -18,6 +18,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 import gi
@@ -67,6 +68,7 @@ DEFAULT_CONFIG = {
     "week_start": "sun",
     "performance": "auto",
     "updates": {"mode": "notify"},
+    "cards": {"agenda": True},
 }
 
 
@@ -103,6 +105,7 @@ def _light_mode():
     return (os.cpu_count() or 4) <= 2 or mem_kb < 4_500_000
 
 
+SHOW_AGENDA = bool((CFG.get("cards") or {}).get("agenda", True))   # the Agenda card (meetings) on the Overview
 LIGHT = _light_mode()
 SLOW = 2.5 if LIGHT else 1.0          # how much slower the background timers run in light mode
 
@@ -978,7 +981,13 @@ X2 = COL + GAP
 LAY = dict(strip=(0, 0, COL, 96), today=(0, 114, COL, 272), agenda=(0, 404, COL, 168),
            github=(X2, 0, COL, 318), projects=(X2, 336, COL, 236))
 CARDS_W, CARDS_H = COL * 2 + GAP, 572
-PROJ_ROWS, TODO_ROWS, AGENDA_ROWS = 4, 5, 3
+PROJ_ROWS, AGENDA_ROWS = 4, 3
+if not SHOW_AGENDA:                                   # Today runs down to the bottom of the Projects card
+    LAY["today"] = (0, 114, COL, 458)
+
+
+def todo_rows():
+    return max(3, int((LAY["today"][3] - 112) // 32))
 LANG_COLORS = {"Python": "4b8bff", "TypeScript": "2f8cff", "JavaScript": "f2c94c", "Dart": "2bc8c0",
                "Go": "22d3ee", "Rust": "fb923c", "Java": "f472b6", "Kotlin": "a78bfa"}
 
@@ -1272,7 +1281,7 @@ class Cards(Gtk.Overlay):
         if inside(ev.x, ev.y, LAY["projects"]):
             self.proj_off = max(0, min(self.proj_off + step, max(0, self._n_proj - PROJ_ROWS)))
         elif inside(ev.x, ev.y, LAY["today"]):
-            self.todo_off = max(0, min(self.todo_off + step, max(0, self._n_todo - TODO_ROWS)))
+            self.todo_off = max(0, min(self.todo_off + step, max(0, self._n_todo - todo_rows())))
         self.area.queue_draw()
         return True
 
@@ -1305,7 +1314,8 @@ class Cards(Gtk.Overlay):
         self.hits = []
         self.card_strip(cr)
         self.card_today(cr)
-        self.card_agenda(cr)
+        if SHOW_AGENDA:
+            self.card_agenda(cr)
         self.card_github(cr)
         self.card_projects(cr)
         return False
@@ -1438,8 +1448,8 @@ class Cards(Gtk.Overlay):
             cr.fill()
 
     def task_rows(self, cr, x, y, w, h, items):
-        self.todo_off = max(0, min(self.todo_off, max(0, len(items) - TODO_ROWS)))
-        for slot in range(TODO_ROWS):
+        self.todo_off = max(0, min(self.todo_off, max(0, len(items) - todo_rows())))
+        for slot in range(todo_rows()):
             i = self.todo_off + slot
             if i >= len(items):
                 break
@@ -1480,7 +1490,7 @@ class Cards(Gtk.Overlay):
                 right -= pill(cr, right, cy + 4, lbl, 10.5, col, align="r") + 6
             text(cr, it["text"], x + 50, cy + 5, 14, C["dim"] if it["done"] else C["text"],
                  maxw=right - (x + 50) - 4, strike=it["done"], alpha=0.8 if it["done"] else 1)
-        self.scrollbar(cr, x + w - 8, y + 64, h - 76, len(items), TODO_ROWS, self.todo_off)
+        self.scrollbar(cr, x + w - 8, y + 64, h - 76, len(items), todo_rows(), self.todo_off)
 
     def card_today(self, cr):
         if self.today_tab == "project":
@@ -4171,8 +4181,8 @@ def scan_dev():
 
 
 PIN_FILE = f"{APP}/current-project.txt"
-MODE_W = 270                       # room kept at the right end of the work bar for the mode switcher
-MODES = ("overview", "coding", "focus")
+MODE_W = 350                       # room kept at the right end of the work bar for the mode switcher
+MODES = ("overview", "coding", "focus", "tasks")
 CMD_FILE = f"{CACHE}/cmd"          # `kiln mode ...` / `kiln test` drop their request here
 
 
@@ -4831,8 +4841,9 @@ class WorkBar(Gtk.DrawingArea):
         return w
 
     def draw_modes(self, cr, Wf):
-        """Overview | Coding | Focus, at the right end of the bar."""
-        labels = [("overview", "Overview"), ("coding", "Coding"), ("focus", "Focus")]
+        """Overview | Coding | Focus (| Tasks), at the right end of the bar."""
+        labels = [("overview", "Overview"), ("coding", "Coding"), ("focus", "Focus")] + \
+                 ([("tasks", "Tasks")] if TASKS_MODE[0] else [])
         widths = [self._measure(cr, lb, 12.5) + 22 for _k, lb in labels]
         x0 = Wf - 14 - sum(widths) - 4
         rrect(cr, x0 - 4, 9, sum(widths) + 8, 32, 16)
@@ -5598,143 +5609,471 @@ class TestsCard(DockCard):
                 term_run(self.terminal, proj["path"], f"less -R +G {shlex.quote(log)}")
 
 
-# --- Tasks: one table (Lark Base) as tabs, e.g. SHOP, BLOG and your own
-class BoardCard(DockCard):
-    KEY, TITLE, ICON, PREF_W = "board", "Tasks", "check-circle", 520
-    ROW = 34
-    STATUS_RANK = {"ongoing": 0, "in progress": 0, "doing": 0}
+# --- Tasks board: a Lark Base table as tabs and status columns (red: not started, yellow: ongoing, green: done)
+STATUS_NAMES = {"todo": "Not yet started", "doing": "Ongoing", "done": "Completed"}
+STATUS_TITLES = {"todo": "Not started", "doing": "Ongoing", "done": "Completed"}
+STATUS_COLOR = {"todo": "red", "doing": "amber", "done": "green"}
+PENDING = {}                              # record id -> (status just chosen, when): shown at once, confirmed by the next sync
+BOARD_NOTE = {"text": "", "until": 0.0}   # a short message under the board (an error, mostly)
+TASKS_MODE = [False]                      # is there a Tasks mode (a board is connected)?
+
+
+def status_kind(status):
+    s = (status or "").strip().lower()
+    return "done" if s in ACC.LarkBase.DONE else "doing" if s in ACC.LarkBase.ACTIVE else "todo"
+
+
+def board_state():
+    """(the service's cache entry, its tasks with the moves you just made already applied)"""
+    c = accounts_data().get("larkbase") or {}
+    out = []
+    for t in c.get("tasks") or []:
+        p = PENDING.get(t["id"])
+        if p:
+            if status_kind(t.get("status")) == status_kind(p[0]) or time.time() - p[1] > 90:
+                PENDING.pop(t["id"], None)
+            else:
+                t = dict(t, status=p[0], done=status_kind(p[0]) == "done")
+        out.append(t)
+    return c, out
+
+
+def board_tabs(c, tasks):
+    names = list(c.get("lists") or sorted({g for t in tasks for g in t.get("groups", [])}))
+    return names + (["All"] if len(names) > 1 else [])
+
+
+def board_groups(tasks, tab):
+    """{'todo': [...], 'doing': [...], 'done': [...]} for one tab, important and nearest deadline first."""
+    by = {"todo": [], "doing": [], "done": []}
+    for t in tasks:
+        if tab == "All" or tab in t.get("groups", []):
+            by[status_kind(t.get("status"))].append(t)
+    key = lambda t: (0 if t.get("priority", "").lower() == "important" else 1, t.get("due") or 9e12, t["title"].lower())  # noqa: E731
+    return {k: sorted(v, key=key) for k, v in by.items()}
+
+
+def move_task(t, kind):
+    """Change a task's status in Lark Base (in the background; the board shows it at once)."""
+    name = STATUS_NAMES[kind]
+    PENDING[t["id"]] = (name, time.time())
+
+    def work():
+        try:
+            ACC.SERVICES["larkbase"].set_status(ACC.details("larkbase"), t["id"], name)
+            ACC.sync("larkbase")
+        except ACC.ServiceError as e:
+            PENDING.pop(t["id"], None)
+            BOARD_NOTE.update(text=str(e), until=time.time() + 20)
+        except Exception as e:                         # noqa: BLE001  (never let a thread die silently)
+            PENDING.pop(t["id"], None)
+            BOARD_NOTE.update(text=f"Could not change the task ({type(e).__name__}).", until=time.time() + 20)
+    threading.Thread(target=work, daemon=True).start()
+
+
+def board_menu(ev, t, redraw):
+    kind = status_kind(t.get("status"))
+    items = [("Open in Lark", lambda: open_url(t["url"])), (None, None)]
+    items += [(f"Move to {STATUS_TITLES[k]}", lambda k=k: (move_task(t, k), redraw())) for k in ("todo", "doing", "done")
+              if k != kind]
+    items += [(None, None), ("Copy title", lambda: copy_text(t["title"])), ("Copy link", lambda: copy_text(t["url"]))]
+    popup_menu(ev, items)
+
+
+def new_task_window(tab=None):
+    run(["/usr/bin/python3", f"{SHARE}/newtask.py"] + (["--list", tab] if tab and tab != "All" else []))
+
+
+def request_mode(name):
+    try:
+        with open(CMD_FILE, "a", encoding="utf-8") as f:
+            f.write(f"mode {name}\n")
+    except OSError:
+        pass
+
+
+def text_wrap(cr, s, x, y, w, size, color, lines=2, strike=False, alpha=1.0):
+    """Up to `lines` lines of wrapped text, first baseline at y. Returns the height used."""
+    lay = PangoCairo.create_layout(cr)
+    lay.set_auto_dir(False)                            # Arabic titles start at the left like the rest of the card
+    lay.get_context().set_base_dir(Pango.Direction.LTR)
+    fd = Pango.FontDescription()
+    fd.set_family(FONT)
+    fd.set_absolute_size(size * Pango.SCALE)
+    lay.set_font_description(fd)
+    lay.set_width(int(w * Pango.SCALE))
+    lay.set_wrap(Pango.WrapMode.WORD_CHAR)
+    lay.set_ellipsize(Pango.EllipsizeMode.END)
+    lay.set_height(-lines)
+    lay.set_text(str(s), -1)
+    base = lay.get_baseline() / Pango.SCALE
+    set_rgba(cr, color, alpha)
+    cr.move_to(x, y - base)
+    PangoCairo.show_layout(cr, lay)
+    cr.new_path()
+    h = lay.get_pixel_size()[1]
+    if strike:
+        cr.set_line_width(1.1)
+        cr.move_to(x, y - size * 0.3)
+        cr.line_to(x + min(w, lay.get_pixel_size()[0]), y - size * 0.3)
+        cr.stroke()
+    return h
+
+
+def status_bar(cr, x, y, w, h, counts):
+    """One bar split in green / yellow / red by how many tasks are done / ongoing / not started."""
+    total = sum(counts.values())
+    rrect(cr, x, y, w, h, h / 2)
+    set_rgba(cr, C["ink"], 0.08)
+    cr.fill()
+    if not total:
+        return
+    cr.save()
+    rrect(cr, x, y, w, h, h / 2)
+    cr.clip()
+    cx = x
+    for kind in ("done", "doing", "todo"):
+        seg = w * counts[kind] / total
+        if seg > 0:
+            cr.rectangle(cx, y, seg, h)
+            set_rgba(cr, C[STATUS_COLOR[kind]], 0.95)
+            cr.fill()
+            cx += seg
+    cr.restore()
+
+
+class BoardBase(DockCard):
+    """What the small card and the big board share: the tabs, the data and the clicks on a task."""
 
     def __init__(self, terminal=None):
         super().__init__(terminal)
-        self.tab, self.show_done, self.off, self._shown = None, False, 0, []
+        self.tab = None
         self.add_events(Gdk.EventMask.SCROLL_MASK)
         self.connect("scroll-event", self._scroll)
 
     def _scroll(self, _w, ev):
         step = 1 if ev.direction == Gdk.ScrollDirection.DOWN else -1 if ev.direction == Gdk.ScrollDirection.UP else 0
         if step:
-            self.off = max(0, self.off + step)
+            self.scrolled(step, ev.x)
             self.queue_draw()
         return True
 
+    def scrolled(self, step, x):
+        pass
+
+    def connect_prompt(self, cr, w):
+        text(cr, "Connect a Lark Base to see its tasks", 24, 90, 13.5, C["text"])
+        text(cr, "Tabs for each project, and yours.", 24, 112, 12, C["dim"])
+        self.region(("connect",), 14, 126, w - 28, 40)
+        rrect(cr, 20, 132, w - 40, 30, 10)
+        set_rgba(cr, C["acc"], 1 if self.hover == ("connect",) else 0.9)
+        cr.fill()
+        text(cr, "Open account settings", w / 2, 152, 13, C["on_acc"], bold=True, align="c")
+
+    def tabs(self, cr, x, y, names, tasks, limit):
+        """Tab pills with the number of open tasks; returns the x after the last one."""
+        for name in names:
+            n = sum(1 for t in tasks if (name == "All" or name in t.get("groups", [])) and not t.get("done"))
+            on = name == self.tab
+            tw = text(cr, name, 0, -100, 13, C["text"], bold=on)          # measured, drawn off screen
+            bw = tw + 30 + len(str(n)) * 7
+            if x + bw > limit:
+                break
+            self.region(("tab", name), x, y, bw, 28)
+            if on:
+                rrect(cr, x, y, bw, 28, 14)
+                set_rgba(cr, C["acc"], 0.18)
+                cr.fill()
+            text(cr, name, x + 12, y + 19, 13, C["text"] if on else C["dim"], bold=on)
+            text(cr, str(n), x + 18 + tw, y + 19, 11, C["acc"] if on else C["dim"])
+            x += bw + 6
+        return x
+
+    def chips(self, cr, x, y, t, right, others=True, me=""):
+        """Right-aligned chips of a task (priority, deadline, owner) ending at `right`; returns the new right edge."""
+        if t.get("priority", "").lower() == "important" and not t.get("done"):
+            right -= pill(cr, right, y, "Important", 10, C["red"], align="r") + 6
+        if t.get("due") and not t.get("done"):
+            lbl, col = due_label(t["due"], clock=False)
+            right -= pill(cr, right, y, lbl, 10, col, align="r") + 6
+        who = [o for o in t.get("owners", []) if o != me]
+        if others and who:
+            right -= text(cr, who[0].split()[0] + (f" +{len(who) - 1}" if len(who) > 1 else ""), right, y, 11, C["dim"],
+                          align="r", maxw=90) + 8
+        return right
+
+    def dot(self, cr, cx, cy, kind, hot=False):
+        cr.new_path()
+        col = C[STATUS_COLOR[kind]]
+        if kind == "todo":
+            cr.set_line_width(1.8)
+            set_rgba(cr, col, 1)
+            cr.arc(cx, cy, 6.2 + (1 if hot else 0), 0, 2 * math.pi)
+            cr.stroke()
+        else:
+            set_rgba(cr, col, 1)
+            cr.arc(cx, cy, 6.5 + (1 if hot else 0), 0, 2 * math.pi)
+            cr.fill()
+            if kind == "done":
+                glyph(cr, "check", cx - 4.5, cy - 4.5, 9, C["card"])
+
+    def footer_note(self, cr, x, y, maxw):
+        if BOARD_NOTE["text"] and time.time() < BOARD_NOTE["until"]:
+            text(cr, BOARD_NOTE["text"], x, y, 11.5, C["red"], maxw=maxw)
+            return True
+        return False
+
+
+class BoardCard(BoardBase):
+    """The card for the Overview and the Coding column: tabs, a status bar, a status filter and its tasks."""
+    KEY, TITLE, ICON, PREF_W = "board", "Tasks", "check-circle", 520
+    ROW_H = 32
+
+    def __init__(self, terminal=None):
+        super().__init__(terminal)
+        self.kind, self.off, self.items = "doing", 0, []
+
+    def scrolled(self, step, _x):
+        self.off = max(0, min(self.off + step, max(0, len(self.items) - 1)))
+
     def body(self, cr, w, h):
         if "larkbase" not in ACC.connected():
-            text(cr, "Connect a Lark Base to see its tasks", 24, 90, 13.5, C["text"])
-            text(cr, "Tabs for each project, and yours.", 24, 112, 12, C["dim"])
-            self.region(("connect",), 14, 126, w - 28, 40)
-            rrect(cr, 20, 132, w - 40, 30, 10)
-            set_rgba(cr, C["acc"], 1 if self.hover == ("connect",) else 0.9)
-            cr.fill()
-            text(cr, "Open account settings", w / 2, 152, 13, C["on_acc"], bold=True, align="c")
+            self.connect_prompt(cr, w)
             return
-        c = accounts_data().get("larkbase") or {}
-        tasks = c.get("tasks") or []
-        names = c.get("lists") or sorted({g for t in tasks for g in t.get("groups", [])})
+        c, tasks = board_state()
+        names = board_tabs(c, tasks)
         if not names:
             text(cr, c.get("error") or "Loading tasks…", 24, 90, 13, C["dim"], maxw=w - 48)
             return
         if self.tab not in names:
             self.tab, self.off = names[0], 0
         me = c.get("me") or ""
-        # tabs
-        x = 20
-        for name in names:
-            mine = [t for t in tasks if name in t.get("groups", []) and not t.get("done")]
-            on = name == self.tab
-            tw = text(cr, name, 0, -100, 13, C["text"], bold=on)          # measure only
-            bw = tw + 30 + len(str(len(mine))) * 7
-            if x + bw > w - 20:
-                break
-            self.region(("tab", name), x, 50, bw, 28)
+        # header: add a task; tabs
+        self.region(("add",), w - 112, 12, 92, 30)
+        rrect(cr, w - 112, 12, 92, 30, 15)
+        set_rgba(cr, C["acc"], 1 if self.hover == ("add",) else 0.88)
+        cr.fill()
+        text(cr, "+  New task", w - 66, 32, 12.5, C["on_acc"], bold=True, align="c")
+        self.tabs(cr, 20, 52, names, tasks, w - 20)
+        hline(cr, 20, w - 20, 90)
+        groups = board_groups(tasks, self.tab)
+        counts = {k: len(v) for k, v in groups.items()}
+        status_bar(cr, 20, 100, w - 40, 7, counts)
+        # status filter: the three statuses with their counts, in the board's red / yellow / green
+        cx = 20
+        for kind in ("todo", "doing", "done"):
+            label = STATUS_TITLES[kind]
+            lw = text(cr, label, 0, -100, 12, C["text"], bold=kind == self.kind)
+            cw = lw + 46 + len(str(counts[kind])) * 7
+            self.region(("kind", kind), cx, 114, cw, 28)
+            on = kind == self.kind
+            col = C[STATUS_COLOR[kind]]
             if on:
-                rrect(cr, x, 50, bw, 28, 14)
-                set_rgba(cr, C["acc"], 0.18)
+                rrect(cr, cx, 114, cw, 28, 14)
+                set_rgba(cr, col, 0.20)
                 cr.fill()
-            text(cr, name, x + 12, 69, 13, C["text"] if on else C["dim"], bold=on)
-            text(cr, str(len(mine)), x + 18 + tw, 69, 11, C["acc"] if on else C["dim"])
-            x += bw + 6
-        hline(cr, 20, w - 20, 88)
-        # rows of the current tab
-        group = [t for t in tasks if self.tab in t.get("groups", [])]
-        opened = [t for t in group if not t.get("done")]
-        shown = group if self.show_done else opened
-        shown = sorted(shown, key=lambda t: (t.get("done", False), self.STATUS_RANK.get(t.get("status", "").lower(), 1),
-                                              0 if t.get("priority", "").lower() == "important" else 1,
-                                              t.get("due") or 9e12, t["title"].lower()))
-        ongoing = sum(1 for t in opened if t.get("status", "").lower() in self.STATUS_RANK)
-        text(cr, f"{len(opened)} open · {ongoing} ongoing", w - 20, 34, 12, C["dim"], align="r")
-        rows = max(1, int((h - 104 - 36) // self.ROW))
-        self.off = max(0, min(self.off, max(0, len(shown) - rows)))
-        self._shown = shown
-        if not shown:
-            text(cr, "Nothing open here. ", 24, 124, 13.5, C["dim"])
-        for slot in range(rows):
-            i = self.off + slot
-            if i >= len(shown):
-                break
-            t = shown[i]
-            y = 98 + slot * self.ROW
-            self.region(("task", i), 10, y, w - 20, self.ROW - 2)
-            cy = y + self.ROW / 2 - 1
-            st = t.get("status", "").lower()
             cr.new_path()
-            if t.get("done"):
-                set_rgba(cr, C["green"], 0.9)
-                cr.arc(28, cy, 6.5, 0, 2 * math.pi)
-                cr.fill()
-            elif st in self.STATUS_RANK:
-                set_rgba(cr, C["amber"], 1)
-                cr.arc(28, cy, 6.5, 0, 2 * math.pi)
-                cr.fill()
-            else:
-                cr.set_line_width(1.6)
-                set_rgba(cr, C["dim"], 0.9)
-                cr.arc(28, cy, 6, 0, 2 * math.pi)
-                cr.stroke()
-            right = w - 22
-            if t.get("priority", "").lower() == "important" and not t.get("done"):
-                right -= pill(cr, right, cy + 4, "Important", 10, C["red"], align="r") + 6
-            if t.get("due") and not t.get("done"):
-                lbl, col = due_label(t["due"], clock=False)
-                right -= pill(cr, right, cy + 4, lbl, 10, col, align="r") + 6
-            others = [o for o in t.get("owners", []) if o != me]
-            if others and self.tab.lower() not in ("mine", "me"):
-                right -= text(cr, others[0].split()[0] + (f" +{len(others) - 1}" if len(others) > 1 else ""), right,
-                              cy + 4, 11, C["dim"], align="r", maxw=90) + 8
-            text(cr, t["title"] or "(untitled)", 46, cy + 5, 13.5, C["dim"] if t.get("done") else C["text"],
-                 maxw=right - 46 - 6, strike=bool(t.get("done")))
-        # scroll bar and footer
-        if len(shown) > rows:
-            track = rows * self.ROW - 6
-            rrect(cr, w - 9, 100, 3, track, 1.5)
+            set_rgba(cr, col, 1)
+            cr.arc(cx + 14, 128, 4, 0, 2 * math.pi)
+            cr.fill()
+            text(cr, label, cx + 26, 133, 12, C["text"] if on else C["dim"], bold=on)
+            text(cr, str(counts[kind]), cx + 32 + lw, 133, 11.5, col if on else C["dim"], bold=on)
+            cx += cw + 6
+        # its tasks
+        self.items = groups[self.kind]
+        rows = max(1, int((h - 40 - 152) // self.ROW_H))
+        self.off = max(0, min(self.off, max(0, len(self.items) - rows)))
+        y = 152
+        if not self.items:
+            text(cr, {"todo": "Nothing waiting to start.", "doing": "Nothing ongoing right now.",
+                      "done": "Nothing completed yet."}[self.kind], 24, y + 22, 13.5, C["dim"])
+        for i in range(self.off, min(len(self.items), self.off + rows)):
+            t = self.items[i]
+            self.region(("task", i), 10, y, w - 20, self.ROW_H - 2)
+            cy = y + self.ROW_H / 2 - 1
+            self.region(("adv", i), 12, y, 30, self.ROW_H - 2)
+            self.dot(cr, 28, cy, self.kind, hot=self.hover == ("adv", i))
+            right = self.chips(cr, 0, cy + 4, t, w - 22, others=self.tab.lower() not in ("mine", "me"), me=me)
+            text(cr, t["title"] or "(untitled)", 46, cy + 5, 13.5, C["dim"] if self.kind == "done" else C["text"],
+                 maxw=right - 46 - 6, strike=self.kind == "done")
+            y += self.ROW_H
+        if len(self.items) > rows:
+            track = rows * self.ROW_H - 6
+            rrect(cr, w - 9, 154, 3, track, 1.5)
             set_rgba(cr, C["ink"], 0.10)
             cr.fill()
-            hh = max(18, track * rows / len(shown))
-            rrect(cr, w - 9, 100 + (track - hh) * self.off / max(1, len(shown) - rows), 3, hh, 1.5)
-            set_rgba(cr, C["acc"], 0.7)
+            hh = max(18, track * rows / len(self.items))
+            rrect(cr, w - 9, 154 + (track - hh) * self.off / max(1, len(self.items) - rows), 3, hh, 1.5)
+            set_rgba(cr, C[STATUS_COLOR[self.kind]], 0.8)
             cr.fill()
-        self.region(("done",), 14, h - 34, 150, 26)
-        text(cr, ("Hide" if self.show_done else "Show") + " completed", 24, h - 16, 11.5,
-             C["acc"] if self.hover == ("done",) else C["dim"])
-        age = c.get("at")
-        if age:
-            ago_ = since(age)
-            text(cr, "updated " + ("just now" if ago_ == "now" else f"{ago_} ago"), w - 20, h - 16, 11, C["dim"], align="r")
+        # footer
+        at = c.get("at")
+        if not self.footer_note(cr, 24, h - 16, w - 160) and at:
+            ago_ = since(at)
+            text(cr, "updated " + ("just now" if ago_ == "now" else f"{ago_} ago"), 24, h - 16, 11, C["dim"])
+        if TASKS_MODE[0]:
+            self.region(("open",), w - 130, h - 34, 116, 26)
+            text(cr, "Open board  ›", w - 20, h - 16, 11.5, C["acc"] if self.hover == ("open",) else C["dim"], align="r")
 
     def activate(self, key, ev):
         if key[0] == "tab":
             self.tab, self.off = key[1], 0
-        elif key[0] == "done":
-            self.show_done, self.off = not self.show_done, 0
+        elif key[0] == "kind":
+            self.kind, self.off = key[1], 0
         elif key[0] == "connect":
             run(["/usr/bin/python3", f"{SHARE}/settings.py", "accounts"])
-        elif key[0] == "task" and key[1] < len(self._shown):
-            t = self._shown[key[1]]
-            if ev.button == 3:
-                popup_menu(ev, [("Open in Lark", lambda: open_url(t["url"])), (None, None),
-                                ("Copy title", lambda: copy_text(t["title"])), ("Copy link", lambda: copy_text(t["url"]))])
+        elif key[0] == "add":
+            new_task_window(self.tab)
+        elif key[0] == "open":
+            request_mode("tasks")
+        elif key[0] in ("task", "adv") and key[1] < len(self.items):
+            t = self.items[key[1]]
+            if key[0] == "adv" and ev.button == 1:
+                move_task(t, {"todo": "doing", "doing": "done", "done": "doing"}[self.kind])
+            elif ev.button == 3:
+                board_menu(ev, t, self.queue_draw)
             elif t.get("url"):
                 open_url(t["url"])
+        self.queue_draw()
+
+
+class BoardView(BoardBase):
+    """The whole Tasks mode: tabs, a progress bar and three status columns with a card for every task."""
+    KEY, TITLE, ICON, PREF_W = "boardview", "Tasks", "check-circle", 1500
+    CARD_H, GAP = 92, 10
+
+    def __init__(self, terminal=None):
+        super().__init__(terminal)
+        self.coff = {"todo": 0, "doing": 0, "done": 0}
+        self.cols = {}
+        self.cache = {}
+
+    def scrolled(self, step, x):
+        for kind, (cx, cw) in self.cols.items():
+            if cx <= x < cx + cw:
+                self.coff[kind] = max(0, self.coff[kind] + step)
+
+    def body(self, cr, w, h):
+        if "larkbase" not in ACC.connected():
+            self.connect_prompt(cr, w)
+            return
+        c, tasks = board_state()
+        names = board_tabs(c, tasks)
+        if not names:
+            text(cr, c.get("error") or "Loading tasks…", 24, 90, 13, C["dim"], maxw=w - 48)
+            return
+        if self.tab not in names:
+            self.tab = names[0]
+        me = c.get("me") or ""
+        # header
+        bx = w - 20 - 124
+        self.region(("add",), bx, 12, 124, 32)
+        rrect(cr, bx, 12, 124, 32, 16)
+        set_rgba(cr, C["acc"], 1 if self.hover == ("add",) else 0.88)
+        cr.fill()
+        text(cr, "+  New task", bx + 62, 33, 13, C["on_acc"], bold=True, align="c")
+        self.region(("refresh",), bx - 40, 14, 30, 28)
+        glyph(cr, "restart", bx - 33, 20, 16, C["text"] if self.hover == ("refresh",) else C["dim"])
+        at = c.get("at")
+        if at:
+            ago_ = since(at)
+            text(cr, "updated " + ("just now" if ago_ == "now" else f"{ago_} ago"), bx - 50, 33, 11.5, C["dim"], align="r")
+        self.tabs(cr, 150, 14, names, tasks, bx - 190)
+        groups = board_groups(tasks, self.tab)
+        counts = {k: len(v) for k, v in groups.items()}
+        total = sum(counts.values())
+        pct = round(100 * counts["done"] / total) if total else 0
+        status_bar(cr, 20, 60, w - 40 - 150, 8, counts)
+        text(cr, f"{pct}% done · {total} tasks", w - 20, 69, 12, C["dim"], align="r")
+        # columns
+        top, bottom = 84, h - 40
+        gap = 14
+        cw = (w - 40 - 2 * gap) / 3
+        self.cols = {}
+        for i, kind in enumerate(("todo", "doing", "done")):
+            cx = 20 + i * (cw + gap)
+            self.cols[kind] = (cx, cw)
+            col = C[STATUS_COLOR[kind]]
+            rrect(cr, cx, top, cw, bottom - top, 16)
+            set_rgba(cr, C["ink"], 0.035)
+            cr.fill()
+            cr.new_path()
+            set_rgba(cr, col, 1)
+            cr.arc(cx + 22, top + 24, 5, 0, 2 * math.pi)
+            cr.fill()
+            text(cr, STATUS_TITLES[kind], cx + 36, top + 29, 14, C["text"], bold=True)
+            text(cr, str(counts[kind]), cx + cw - 18, top + 29, 13, col, bold=True, align="r")
+            items = groups[kind]
+            rows = max(1, int((bottom - top - 50) // (self.CARD_H + self.GAP)))
+            self.coff[kind] = max(0, min(self.coff[kind], max(0, len(items) - rows)))
+            y = top + 46
+            if not items:
+                text(cr, "Nothing here", cx + 20, y + 22, 12.5, C["dim"])
+            for j in range(self.coff[kind], min(len(items), self.coff[kind] + rows)):
+                self.card(cr, cx + 10, y, cw - 20, items[j], kind, me, (kind, j))
+                y += self.CARD_H + self.GAP
+            if len(items) > rows:
+                track = bottom - top - 56
+                rrect(cr, cx + cw - 6, top + 46, 3, track, 1.5)
+                set_rgba(cr, C["ink"], 0.10)
+                cr.fill()
+                hh = max(20, track * rows / len(items))
+                rrect(cr, cx + cw - 6, top + 46 + (track - hh) * self.coff[kind] / max(1, len(items) - rows), 3, hh, 1.5)
+                set_rgba(cr, col, 0.8)
+                cr.fill()
+        # footer
+        if not self.footer_note(cr, 24, h - 14, w - 420):
+            text(cr, "Click a task to open it · click its dot to move it forward · right-click for more · scroll a column",
+                 24, h - 14, 11.5, C["dim"], maxw=w - 300)
+
+    def card(self, cr, x, y, w, t, kind, me, ident):
+        self.region(("card",) + ident, x, y, w, self.CARD_H)
+        col = C[STATUS_COLOR[kind]]
+        rrect(cr, x, y, w, self.CARD_H, 12)
+        set_rgba(cr, C["ink"], 0.07 if self.hover and self.hover[1:] == ident else 0.045)
+        cr.fill()
+        cr.save()
+        rrect(cr, x, y, w, self.CARD_H, 12)
+        cr.clip()
+        cr.rectangle(x, y, 4, self.CARD_H)
+        set_rgba(cr, col, 0.95)
+        cr.fill()
+        cr.restore()
+        self.region(("adv",) + ident, x + w - 34, y + 6, 28, 28)
+        self.dot(cr, x + w - 20, y + 20, kind, hot=self.hover == ("adv",) + ident)
+        text_wrap(cr, t["title"] or "(untitled)", x + 16, y + 26, w - 62, 13.5, C["dim"] if kind == "done" else C["text"],
+                  lines=2, strike=kind == "done")
+        yy = y + self.CARD_H - 14
+        right = self.chips(cr, x, yy, t, x + w - 14, others=False)
+        px = x + 16
+        who = ", ".join(o.split()[0] for o in t.get("owners", []))
+        if who:
+            px += text(cr, who, px, yy, 11, C["dim"], maxw=max(40, right - px - 10)) + 10
+        if t.get("detail") and px < right - 60:
+            text(cr, "· " + t["detail"].split(",")[0], px, yy, 11, C["dim"], maxw=max(30, right - px - 8))
+
+    def activate(self, key, ev):
+        c, tasks = board_state()
+        if key[0] == "tab":
+            self.tab = key[1]
+            self.coff = {"todo": 0, "doing": 0, "done": 0}
+        elif key[0] == "connect":
+            run(["/usr/bin/python3", f"{SHARE}/settings.py", "accounts"])
+        elif key[0] == "add":
+            new_task_window(self.tab)
+        elif key[0] == "refresh":
+            refresh("accounts")
+        elif key[0] in ("card", "adv"):
+            kind, j = key[1], key[2]
+            items = board_groups(tasks, self.tab or "All").get(kind, [])
+            if j < len(items):
+                t = items[j]
+                if key[0] == "adv" and ev.button == 1:
+                    move_task(t, {"todo": "doing", "doing": "done", "done": "doing"}[kind])
+                elif ev.button == 3:
+                    board_menu(ev, t, self.queue_draw)
+                elif t.get("url"):
+                    open_url(t["url"])
         self.queue_draw()
 
 
@@ -6307,6 +6646,10 @@ def main():
         dock_geo[key] = (dx, dy, dw)
         dock_card[key] = card
     DOCK_ACTIVE.update(dock)
+    bigboard = None
+    if "larkbase" in ACC.connected():                     # the Tasks mode: a board over the whole work area
+        bigboard = BoardView(term)
+        TASKS_MODE[0] = True
     icons = IconsGrid(term)
     w4 = make_window("Kiln Icons", icons, g.x + L["icons"][0], g.y + L["icons"][1], ICONS_W, ICONS_H)
     launcher = Launcher(term, icons)
@@ -6324,6 +6667,10 @@ def main():
     # ---- modes: Overview (everything), Coding (terminal beside the cards), Focus (terminal only)
     wins = dict(cards=w1, term=w2, focus=w3, music=w5, bar=w6, icons=w4)
     wins.update({f"dock_{k}": w for k, w in dock.items()})
+    if bigboard:
+        bwin = make_window("Kiln Tasks", bigboard, g.x + 0, g.y + 0, 800, 600, resizable=True)
+        bwin.show_all()                                   # (apply_mode hides it again unless this is the Tasks mode)
+        wins["boardview"] = bwin
 
     # Focus mode: a veil that dims the wallpaper, and the Pomodoro timer as a pill in the terminal header
     veil_area = Gtk.DrawingArea()
@@ -6367,7 +6714,7 @@ def main():
             win.resize(w, h)
 
     def apply_mode(name, remember=True):
-        name = name if name in MODES else "overview"
+        name = name if name in MODES and (name != "tasks" or bigboard) else "overview"
         state["mode"] = name
         top, gap, bar_y, left = ex["top"], ex["gap"], ex["bar_y"], ex["left"]
         side = [k for k in ("git", "board", "tests", "notes") if k in dock]       # the project's own cards
@@ -6390,9 +6737,17 @@ def main():
             tw, th = min(1700, int(ex["W"] * 0.62)), min(bar_y - gap - top, 940)
             tx, ty = (ex["W"] - tw) // 2, top + (bar_y - gap - top - th) // 2
             show, veil, term.alpha, pt = {"term", "bar"}, True, 0.97, 13
+        elif name == "tasks" and bigboard:
+            bx = left + CARDS_W + gap
+            bw_, bh_ = ex["W"] - bx - ex["right"], bar_y - gap - top
+            bigboard.set_width(bw_)
+            bigboard.set_height(bh_)
+            place(wins["boardview"], bx, top, bw_, bh_)
+            (tx, ty), (tw, th) = L["term"], ex["term0"]
+            show = {"cards", "boardview", "bar"}
         else:
             (tx, ty), (tw, th) = L["term"], ex["term0"]
-            show = set(wins)
+            show = set(wins) - {"boardview"}
         term.set_size(tw, th)
         term.set_font_pt(pt)
         place(w2, tx, ty, tw, th)
@@ -6424,7 +6779,7 @@ def main():
                     f.write(name)
             except OSError:
                 pass
-        if name != "overview":
+        if name in ("coding", "focus"):
             term.term.grab_focus()
 
     qbar.on_mode = apply_mode
@@ -6443,7 +6798,8 @@ def main():
             if words[0] == "mode":
                 want = words[1] if len(words) > 1 else "next"
                 if want == "next":
-                    want = MODES[(MODES.index(state["mode"]) + 1) % len(MODES)]
+                    avail = [m for m in MODES if m != "tasks" or bigboard]
+                    want = avail[(avail.index(state["mode"]) + 1) % len(avail)] if state["mode"] in avail else "overview"
                 apply_mode(want)
             elif words[0] == "test" and qbar.proj:
                 qbar.run_tests(qbar.proj["path"])

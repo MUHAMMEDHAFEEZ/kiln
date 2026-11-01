@@ -46,6 +46,7 @@ DEFAULTS = {
     "week_start": "sun",
     "performance": "auto",
     "updates": {"mode": "notify"},
+    "cards": {"agenda": True},
     "integrations": {"github": True, "lark": False, "claude_code": True},
     "theme_apply": {"gtk": True, "dock": True, "gnome_terminal": True, "wallpaper": True},
 }
@@ -181,17 +182,7 @@ class Settings(Gtk.Window):
         c = (self.themes.get("themes", {}).get(self.current) or {}).get("colors")
         if not c:
             return
-        sel, on, acc = "#" + c["sel"], "#" + c["on_sel"], "#" + c["acc"]
-        css = f"""
-        stacksidebar row:selected, stacksidebar row:selected:hover {{ background-color: {sel}; color: {on}; }}
-        switch:checked {{ background-image: none; background-color: {sel}; border-color: {sel}; }}
-        button.suggested-action {{ background-image: none; background-color: {sel}; color: {on}; border-color: {sel}; }}
-        button.suggested-action:hover {{ background-image: none; background-color: alpha({sel}, 0.85); }}
-        scale highlight, scale fill {{ background-image: none; background-color: {sel}; border-color: {sel}; }}
-        scale slider:hover {{ border-color: {sel}; }}
-        progressbar progress {{ background-image: none; background-color: {sel}; }}
-        link, .kiln-pill {{ color: {acc}; }}
-        """
+        css = T.gtk_app_css(c)
         try:
             self.accent_prov.load_from_data(css.encode())
         except GLib.Error:
@@ -490,6 +481,8 @@ class Settings(Gtk.Window):
         box.pack_start(self.row("Performance", pf,
                                 "Light mode refreshes less often and scans less. Automatic picks it on "
                                 "computers with two cores or less than 4 GB of memory."), False, False, 0)
+        box.pack_start(self.switch("cards.agenda", "Agenda card", "Today's meetings from your calendars. Turn it off and "
+                                   "the Today card uses the room (restart Kiln to apply)."), False, False, 0)
         box.pack_start(label("Cards on big screens", "kiln-section"), False, False, 0)
         box.pack_start(label("Kiln places the cards that fit in the free space next to the terminal. "
                              "A laptop screen has none.", "kiln-sub", wrap=True), False, False, 0)

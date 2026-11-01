@@ -594,6 +594,7 @@ class LarkBase(Service):
     id, name, color = "larkbase", "Lark Base", "00d6b9"
     tagline = "A tasks table from a Lark Base, split into lists (projects, people)"
     kinds = ("tasks",)
+    can_complete = True
     fields = [Field("link", "Base link", hint="the link of the table, from your browser"),
               Field("lists", "Lists", multiline=True, optional=True,
                     hint="one per line, like  SHOP = PROJECTS: SHOP   or   Mine = Task leader: me")]
@@ -683,6 +684,85 @@ class LarkBase(Service):
             return [str(v["name"]).strip()] if v.get("name") else ([str(v["text"]).strip()] if v.get("text") else [])
         return [str(v).strip()] if str(v).strip() else []
 
+    # ---- writing (needs: lark-cli auth login --scope "base:record:create base:record:update")
+    WRITE_HELP = ("Kiln needs permission to change this table. Run: lark-cli auth login --scope "
+                  "\"base:record:create base:record:update\"")
+
+    def _fieldmap(self, cfg):
+        fm = dict(self.DEFAULT_FIELDS)
+        fm.update({k: cfg[f"{k}_field"] for k in self.DEFAULT_FIELDS if cfg.get(f"{k}_field")})
+        return fm
+
+    def options(self, cfg):
+        """The choices of the select columns, with the exact names Lark expects when writing:
+        {'status': ['Not yet started', 'Ongoing ', 'Completed'], 'project': [...], 'priority': [...], 'dept': [...]}"""
+        base, table, _url = self.parse_link(cfg.get("link"))
+        fm = self._fieldmap(cfg)
+        d = self._cli("base", "+field-list", "--base-token", base, "--table-id", table, "--as", "user")
+        by_name = {f.get("name"): f for f in d.get("fields") or d.get("items") or []}
+        return {key: [o.get("name", "") for o in (by_name.get(fm[key]) or {}).get("options", [])]
+                for key in ("status", "project", "priority", "dept")}
+
+    def _write(self, cfg, fields, record_id=None):
+        base, table, _url = self.parse_link(cfg.get("link"))
+        args = ["base", "+record-upsert", "--base-token", base, "--table-id", table, "--json",
+                json.dumps(fields, ensure_ascii=False), "--as", "user"]
+        if record_id:
+            args += ["--record-id", record_id]
+        try:
+            return self._cli(*args)
+        except ServiceError as e:
+            if "read access" in str(e):                     # a missing *write* scope reads the same way
+                raise ServiceError(self.WRITE_HELP) from None
+            raise
+
+    @staticmethod
+    def pick(options, clean):
+        """The exact option name whose trimmed text matches `clean` (case-insensitive), else None."""
+        want = (clean or "").strip().lower()
+        return next((o for o in options if o.strip().lower() == want), None)
+
+    def create(self, cfg, title, project=None, status=None, priority=None, owners=None, due=None, dept=None,
+               note=None, opts=None):
+        """Add a task. `owners` are open ids ('ou_…'); `due` is 'YYYY-MM-DD'. Returns the new record id."""
+        if not (title or "").strip():
+            raise ServiceError("A task needs a title.")
+        fm, opts = self._fieldmap(cfg), opts or self.options(cfg)
+        fields = {fm["title"]: title.strip()}
+        for key, value, multi in (("status", status, False), ("priority", priority, False),
+                                  ("project", project, True), ("dept", dept, True)):
+            values = [value] if isinstance(value, str) else list(value or [])
+            names = []
+            for v in values:
+                exact = self.pick(opts.get(key, []), v)
+                if not exact:
+                    raise ServiceError(f"“{v}” is not one of the choices for {fm[key]}.")
+                names.append(exact)
+            if names:
+                fields[fm[key]] = names
+        if owners:
+            fields[fm["owner"]] = [{"id": o} for o in owners]
+        if due:
+            fields[fm["due"]] = f"{due} 00:00"
+        if note:
+            fields["description"] = note
+        d = self._write(cfg, fields)
+        rec = d.get("record") or d
+        return rec.get("record_id") or rec.get("id") or ""
+
+    def set_status(self, cfg, record_id, status):
+        fm, opts = self._fieldmap(cfg), self.options(cfg)
+        exact = self.pick(opts.get("status", []), status)
+        if not exact:
+            raise ServiceError(f"“{status}” is not one of the statuses.")
+        self._write(cfg, {fm["status"]: [exact]}, record_id)
+
+    def complete(self, cfg, tid):
+        done = next((o for o in self.options(cfg).get("status", []) if o.strip().lower() in self.DONE), None)
+        if not done:
+            raise ServiceError("This table has no “Completed” status.")
+        self.set_status(cfg, tid, done)
+
     def fetch(self, cfg):
         base, table, base_url = self.parse_link(cfg.get("link"))
         rows, offset = [], 0
@@ -735,7 +815,13 @@ class LarkBase(Service):
                      # the Today card gets only what you are working on right now
                      today=bool(not done and status.lower() in self.ACTIVE and mine(r.get(fm["owner"]))))
             out.append(t)
-        return {"tasks": out, "events": [], "lists": [n for n, _f, _v in lists], "me": my_name}
+        people = {}
+        for _rid, r in rows:
+            for x in r.get(fm["owner"]) or []:
+                if isinstance(x, dict) and x.get("id") and x.get("name"):
+                    people[x["id"]] = x["name"]
+        return {"tasks": out, "events": [], "lists": [n for n, _f, _v in lists], "me": my_name,
+                "me_id": my_id, "people": people}
 
 
 class Lark(Service):
@@ -1033,7 +1119,8 @@ def sync(only=None):
         try:
             data = svc.fetch(cfg)
             entry.update(ok=True, error=None, tasks=data["tasks"], events=data["events"], at=time.time(),
-                         lists=data.get("lists") or [], me=data.get("me") or "")
+                         lists=data.get("lists") or [], me=data.get("me") or "",
+                         me_id=data.get("me_id") or "", people=data.get("people") or {})
         except ServiceError as e:
             entry.update(ok=False, error=str(e), at=time.time())
             entry.setdefault("tasks", [])

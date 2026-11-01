@@ -3,7 +3,11 @@
 ## Unreleased
 
 * **Lark Base**: a new service and a **Tasks board** card with a tab per list (projects, your own tasks); what you are
-  working on also shows in Today. Read only. See `docs/ACCOUNTS.md`.
+  working on also shows in Today. See `docs/ACCOUNTS.md`.
+* The board shows a status bar and filter in red (not started), yellow (ongoing) and green (completed). You can add a task
+  (`+ New task`, `kiln newtask`), move a task between statuses (click its dot, or right-click) and complete it from Today.
+* A **Tasks mode** (fourth chip of the mode switcher): the whole screen is the board, a column per status.
+* The Agenda card can be turned off (`cards.agenda`); Today then uses its room and shows more tasks.
 * Arabic text that fits its space now starts at the left like the rest of the row.
 
 ## 1.2.1 (2026-10-25)

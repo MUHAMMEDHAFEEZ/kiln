@@ -2,6 +2,7 @@
 
     python3 -m unittest discover -s tests
 """
+import json
 import os
 import stat
 import sys
@@ -21,6 +22,21 @@ if args[:2] == ["auth", "status"]:
     print(json.dumps({"identities": {"user": {"openId": "ou_me", "userName": "Me Myself"}}}))
 elif args[:2] == ["base", "+base-get"]:
     print(json.dumps({"ok": True, "data": {"base": {"name": "Task management"}}}))
+elif args[:2] == ["base", "+field-list"]:
+    print(json.dumps({"ok": True, "data": {"fields": [
+        {"name": "Status", "type": "select", "multiple": False, "options": [{"name": "Not yet started"}, {"name": "Ongoing "}, {"name": "Completed"}]},
+        {"name": "PROJECTS", "type": "select", "multiple": True, "options": [{"name": "SHOP"}, {"name": "BLOG"}]},
+        {"name": "Priority", "type": "select", "multiple": False, "options": [{"name": "Normal"}, {"name": "Important"}]},
+        {"name": "Departments", "type": "select", "multiple": True, "options": [{"name": "Backend"}, {"name": "UI/UX"}]},
+        {"name": "Task leader", "type": "user", "multiple": True}]}}))
+elif args[:2] == ["base", "+record-upsert"]:
+    if os.environ.get("FAKE_NO_WRITE"):
+        print(json.dumps({"ok": False, "error": {"type": "authorization", "subtype": "missing_scope", "message": "x"}}))
+        sys.exit(1)
+    with open(os.environ["FAKE_LOG"], "a") as f:
+        f.write(json.dumps({"json": json.loads(args[args.index("--json") + 1]),
+                            "record": args[args.index("--record-id") + 1] if "--record-id" in args else None}) + "\n")
+    print(json.dumps({"ok": True, "data": {"record": {"record_id": "recNEW1"}}}))
 elif args[:2] == ["base", "+record-list"]:
     offset = int(args[args.index("--offset") + 1]) if "--offset" in args else 0
     fields = ["Task", "Status", "Task leader", "PROJECTS", "Priority", "Estimate Deadline", "Departments"]
@@ -50,11 +66,15 @@ class LarkBaseTests(unittest.TestCase):
         self.old_path = os.environ["PATH"]
         os.environ["PATH"] = self.tmp.name + os.pathsep + self.old_path
         os.environ.pop("FAKE_FAIL", None)
+        os.environ.pop("FAKE_NO_WRITE", None)
+        self.log = f"{self.tmp.name}/writes.jsonl"
+        os.environ["FAKE_LOG"] = self.log
         self.svc = A.SERVICES["larkbase"]
 
     def tearDown(self):
         os.environ["PATH"] = self.old_path
         os.environ.pop("FAKE_FAIL", None)
+        os.environ.pop("FAKE_NO_WRITE", None)
         self.tmp.cleanup()
 
     def test_link_parsing(self):
@@ -99,6 +119,61 @@ class LarkBaseTests(unittest.TestCase):
         with self.assertRaises(A.ServiceError) as c:
             self.svc.check({"link": LINK})
         self.assertIn("lark-cli auth login --scope", str(c.exception))
+
+    def writes(self):
+        with open(self.log) as f:
+            return [json.loads(l) for l in f if l.strip()]
+
+    def test_options_keep_the_exact_names(self):
+        o = self.svc.options({"link": LINK})
+        self.assertEqual(o["status"], ["Not yet started", "Ongoing ", "Completed"])      # note the space in "Ongoing "
+        self.assertEqual(o["project"], ["SHOP", "BLOG"])
+
+    def test_create_uses_exact_option_names_and_people_ids(self):
+        rid = self.svc.create({"link": LINK}, " Fix the login ", project="shop", status="ongoing", priority="important",
+                              owners=["ou_me"], due="2030-01-02", dept=["backend"], note="details")
+        self.assertEqual(rid, "recNEW1")
+        w = self.writes()[0]
+        self.assertIsNone(w["record"])
+        self.assertEqual(w["json"], {"Task": "Fix the login", "Status": ["Ongoing "], "Priority": ["Important"],
+                                     "PROJECTS": ["SHOP"], "Departments": ["Backend"], "Task leader": [{"id": "ou_me"}],
+                                     "Estimate Deadline": "2030-01-02 00:00", "description": "details"})
+
+    def test_create_refuses_nonsense_before_writing(self):
+        with self.assertRaises(A.ServiceError):
+            self.svc.create({"link": LINK}, "  ")
+        with self.assertRaises(A.ServiceError) as c:
+            self.svc.create({"link": LINK}, "x", project="Nope")
+        self.assertIn("Nope", str(c.exception))
+        self.assertFalse(os.path.exists(self.log))
+
+    def test_moving_a_task_and_completing_it(self):
+        self.svc.set_status({"link": LINK}, "rec7", "Ongoing")
+        self.svc.complete({"link": LINK}, "rec8")
+        a, b = self.writes()
+        self.assertEqual((a["record"], a["json"]), ("rec7", {"Status": ["Ongoing "]}))
+        self.assertEqual((b["record"], b["json"]), ("rec8", {"Status": ["Completed"]}))
+        with self.assertRaises(A.ServiceError):
+            self.svc.set_status({"link": LINK}, "rec7", "Someday")
+
+    def test_a_missing_write_permission_says_how_to_fix_it(self):
+        os.environ["FAKE_NO_WRITE"] = "1"
+        with self.assertRaises(A.ServiceError) as c:
+            self.svc.set_status({"link": LINK}, "rec7", "Ongoing")
+        self.assertIn("base:record:create base:record:update", str(c.exception))
+
+
+class NewTaskTests(unittest.TestCase):
+    def test_a_tab_name_becomes_the_project_to_preselect(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "share"))
+        import newtask
+        cfg = {"link": LINK, "lists": "SHOP = PROJECTS: SHOP\nBLOG = PROJECTS: BLOG\nAda = Task leader: me"}
+        self.assertEqual(newtask.list_to_project(cfg, "SHOP"), "shop")
+        self.assertEqual(newtask.list_to_project(cfg, "blog"), "blog")
+        self.assertIsNone(newtask.list_to_project(cfg, "Ada"))        # "mine" is not a project
+        self.assertIsNone(newtask.list_to_project(cfg, "All"))
+        self.assertIsNone(newtask.list_to_project(cfg, None))
+        self.assertEqual(newtask.list_to_project({"link": LINK}, "DOCS"), "DOCS")   # default lists are per project
 
 
 if __name__ == "__main__":

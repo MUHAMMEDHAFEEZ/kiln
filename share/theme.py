@@ -461,6 +461,21 @@ def gtk_accent_css(c):
             "/* kiln:end */\n")
 
 
+def gtk_app_css(c):
+    """CSS that gives Kiln's own GTK windows (Settings, New task) the theme's accent colour."""
+    sel, on, acc = "#" + c["sel"], "#" + c["on_sel"], "#" + c["acc"]
+    return f"""
+    stacksidebar row:selected, stacksidebar row:selected:hover {{ background-color: {sel}; color: {on}; }}
+    switch:checked {{ background-image: none; background-color: {sel}; border-color: {sel}; }}
+    button.suggested-action {{ background-image: none; background-color: {sel}; color: {on}; border-color: {sel}; }}
+    button.suggested-action:hover {{ background-image: none; background-color: alpha({sel}, 0.85); }}
+    scale highlight, scale fill {{ background-image: none; background-color: {sel}; border-color: {sel}; }}
+    scale slider:hover {{ border-color: {sel}; }}
+    progressbar progress {{ background-image: none; background-color: {sel}; }}
+    link, .kiln-pill {{ color: {acc}; }}
+    """
+
+
 def write_gtk_accent(c, home=HOME):
     """Apps built on GTK (GNOME Settings, Files, Kiln Settings ...) take the theme's accent colour, through a
     marked block in ~/.config/gtk-3.0/gtk.css and gtk-4.0/gtk.css. Pass None to take the block out again."""

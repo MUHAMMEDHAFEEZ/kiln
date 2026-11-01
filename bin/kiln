@@ -36,6 +36,7 @@ Setup
   connect <service>        connect Todoist, Trello, Linear, Asana, Jira, Notion, ClickUp, Slack, a calendar ...
   disconnect <service>     remove its saved details
   sync                     refresh the tasks and meetings now
+  newtask [options]        add a task to your Lark Base board (no options: a window; see newtask --help)
   update [--check|--yes]   look for a newer release and install it (--rollback goes back one version)
   settings [page]          open the Kiln Settings window (page: accounts, themes, general ...)
   config                   open ~/.config/kiln/config.json
@@ -124,6 +125,7 @@ case "$cmd" in
   connect|disconnect) [ -n "${1:-}" ] || die "usage: kiln $cmd <service>  (see: kiln accounts)"
     /usr/bin/python3 "$SHARE/accounts.py" "$cmd" "$@" ;;
   sync) /usr/bin/python3 "$SHARE/accounts.py" sync ;;
+  newtask) /usr/bin/python3 "$SHARE/newtask.py" "$@" ;;
   update)
     case "${1:-}" in
       --check) /usr/bin/python3 "$SHARE/update.py" check ;;
