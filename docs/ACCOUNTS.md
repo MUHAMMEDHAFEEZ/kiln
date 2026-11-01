@@ -88,7 +88,7 @@ Leave it empty to get one list per project plus yours. Kiln expects columns call
 *PROJECTS*, *Priority*, *Estimate Deadline* (or *End Date*) and *Departments*. If yours are named differently, add
 `title_field`, `status_field`, `owner_field`, `project_field`, `priority_field`, `due_field` or `dept_field` to the
 `larkbase` entry of `~/.config/kiln/accounts.json`. Done statuses are *Completed*, *Done*, *Closed* and *Complete*.
-Click a task to open it in Lark. **Click the coloured dot** of a task to move it forward (not started → ongoing → completed;
+Click a task to open it in Lark. **On the Tasks board you can drag a card** to another column to change its status (a click without moving opens the task). **Click the coloured dot** of a task to move it forward (not started → ongoing → completed;
 on a completed task it reopens it), or right-click for *Move to…*. Statuses are red (not started), yellow (ongoing) and green
 (completed). **+ New task** (on the card and on the board) opens a window for the title, project, status, priority,
 department, who it is for, a due date and a note; `kiln newtask` opens the same window, and

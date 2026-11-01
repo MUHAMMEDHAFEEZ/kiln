@@ -5946,7 +5946,69 @@ class BoardView(BoardBase):
         super().__init__(terminal)
         self.coff = {"todo": 0, "doing": 0, "done": 0}
         self.cols = {}
-        self.cache = {}
+        self.press = None          # (key, x, y): a card pressed but not yet dragged (a click if it never moves)
+        self.drag = None           # the card being carried: task, kind it came from, pointer position, grab offset
+        self.add_events(Gdk.EventMask.BUTTON_RELEASE_MASK | Gdk.EventMask.BUTTON1_MOTION_MASK)
+        self.connect("button-release-event", self._release)
+        self.connect("motion-notify-event", self._motion)
+
+    DRAG_START = 8                 # pixels the pointer must travel before a press becomes a drag
+
+    def _on_press(self, _w, ev):
+        key = self._hit(ev.x, ev.y)
+        if key is None:
+            return False
+        if ev.button == 1 and key[0] == "card":        # wait: a click opens the task, a drag moves it
+            self.press = (key, ev.x, ev.y)
+            return True
+        self.activate(key, ev)
+        return True
+
+    def _set_hover(self, key):
+        if not self.drag:                                           # the "grabbing" hand stays while carrying
+            super()._set_hover(key)
+
+    def column_at(self, x):
+        return next((k for k, (cx, cw) in self.cols.items() if cx <= x < cx + cw), None)
+
+    def _task_of(self, key):
+        c, tasks = board_state()
+        items = board_groups(tasks, self.tab or "All").get(key[1], [])
+        return items[key[2]] if key[2] < len(items) else None
+
+    def _motion(self, _w, ev):
+        if self.drag:
+            self.drag.update(x=ev.x, y=ev.y)
+            self.queue_draw()
+        elif self.press and (ev.state & Gdk.ModifierType.BUTTON1_MASK) and \
+                max(abs(ev.x - self.press[1]), abs(ev.y - self.press[2])) > self.DRAG_START:
+            key = self.press[0]
+            t = self._task_of(key)
+            rect = next((r for r, k in self.hits if k == key), None)
+            if t and rect:
+                self.drag = dict(task=t, kind=key[1], x=ev.x, y=ev.y, ox=self.press[1] - rect[0],
+                                 oy=self.press[2] - rect[1], w=rect[2], key=key)
+                win = self.get_window()
+                if win:
+                    win.set_cursor(Gdk.Cursor.new_from_name(Gdk.Display.get_default(), "grabbing"))
+                self.queue_draw()
+        return False
+
+    def _release(self, _w, ev):
+        if ev.button != 1:
+            return False
+        drag, press, self.drag, self.press = self.drag, self.press, None, None
+        win = self.get_window()
+        if win:
+            win.set_cursor(None)
+        if drag:
+            target = self.column_at(ev.x)
+            if target and target != drag["kind"]:
+                move_task(drag["task"], target)
+        elif press:
+            self.activate(press[0], ev)                 # it never moved: an ordinary click
+        self.queue_draw()
+        return True
 
     def scrolled(self, step, x):
         for kind, (cx, cw) in self.cols.items():
@@ -6010,7 +6072,13 @@ class BoardView(BoardBase):
             if not items:
                 text(cr, "Nothing here", cx + 20, y + 22, 12.5, C["dim"])
             for j in range(self.coff[kind], min(len(items), self.coff[kind] + rows)):
+                carried = bool(self.drag) and self.drag["key"] == ("card", kind, j)
+                if carried:
+                    cr.push_group()
                 self.card(cr, cx + 10, y, cw - 20, items[j], kind, me, (kind, j))
+                if carried:
+                    cr.pop_group_to_source()
+                    cr.paint_with_alpha(0.30)
                 y += self.CARD_H + self.GAP
             if len(items) > rows:
                 track = bottom - top - 56
@@ -6021,14 +6089,40 @@ class BoardView(BoardBase):
                 rrect(cr, cx + cw - 6, top + 46 + (track - hh) * self.coff[kind] / max(1, len(items) - rows), 3, hh, 1.5)
                 set_rgba(cr, col, 0.8)
                 cr.fill()
+        if self.drag:
+            d = self.drag
+            target = self.column_at(d["x"])
+            if target and target != d["kind"]:                        # where it would land
+                cx, cwid = self.cols[target]
+                rrect(cr, cx, top, cwid, bottom - top, 16)
+                set_rgba(cr, C[STATUS_COLOR[target]], 0.10)
+                cr.fill_preserve()
+                set_rgba(cr, C[STATUS_COLOR[target]], 0.9)
+                cr.set_line_width(2)
+                cr.stroke()
+                text(cr, f"Move to {STATUS_TITLES[target]}", cx + cwid / 2, bottom - 14, 12.5, C[STATUS_COLOR[target]],
+                     bold=True, align="c")
+            gx, gy = d["x"] - d["ox"], d["y"] - d["oy"]
+            cr.push_group()
+            self.card(cr, gx, gy, d["w"], d["task"], status_kind(d["task"].get("status")), me, ("ghost",), ghost=True)
+            cr.pop_group_to_source()
+            cr.paint_with_alpha(0.93)
         # footer
         if not self.footer_note(cr, 24, h - 14, w - 420):
-            text(cr, "Click a task to open it · click its dot to move it forward · right-click for more · scroll a column",
-                 24, h - 14, 11.5, C["dim"], maxw=w - 300)
+            text(cr, "Drag a task to another column to change its status · click to open it · right-click for more · "
+                 "scroll a column", 24, h - 14, 11.5, C["dim"], maxw=w - 300)
 
-    def card(self, cr, x, y, w, t, kind, me, ident):
-        self.region(("card",) + ident, x, y, w, self.CARD_H)
+    def card(self, cr, x, y, w, t, kind, me, ident, ghost=False):
         col = C[STATUS_COLOR[kind]]
+        if ghost:                                                   # the card in the air: a shadow and a solid face
+            rrect(cr, x + 2, y + 6, w, self.CARD_H, 12)
+            set_rgba(cr, "000000", 0.40)
+            cr.fill()
+            rrect(cr, x, y, w, self.CARD_H, 12)
+            set_rgba(cr, C["card"], 1)
+            cr.fill()
+        else:
+            self.region(("card",) + ident, x, y, w, self.CARD_H)
         rrect(cr, x, y, w, self.CARD_H, 12)
         set_rgba(cr, C["ink"], 0.07 if self.hover and self.hover[1:] == ident else 0.045)
         cr.fill()
@@ -6039,7 +6133,8 @@ class BoardView(BoardBase):
         set_rgba(cr, col, 0.95)
         cr.fill()
         cr.restore()
-        self.region(("adv",) + ident, x + w - 34, y + 6, 28, 28)
+        if not ghost:
+            self.region(("adv",) + ident, x + w - 34, y + 6, 28, 28)
         self.dot(cr, x + w - 20, y + 20, kind, hot=self.hover == ("adv",) + ident)
         text_wrap(cr, t["title"] or "(untitled)", x + 16, y + 26, w - 62, 13.5, C["dim"] if kind == "done" else C["text"],
                   lines=2, strike=kind == "done")

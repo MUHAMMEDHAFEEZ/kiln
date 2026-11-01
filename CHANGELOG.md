@@ -6,7 +6,8 @@
   working on also shows in Today. See `docs/ACCOUNTS.md`.
 * The board shows a status bar and filter in red (not started), yellow (ongoing) and green (completed). You can add a task
   (`+ New task`, `kiln newtask`), move a task between statuses (click its dot, or right-click) and complete it from Today.
-* A **Tasks mode** (fourth chip of the mode switcher): the whole screen is the board, a column per status.
+* A **Tasks mode** (fourth chip of the mode switcher): the whole screen is the board, a column per status. Drag a card to
+  another column to change its status; the column it would land in lights up.
 * The Agenda card can be turned off (`cards.agenda`); Today then uses its room and shows more tasks.
 * Arabic text that fits its space now starts at the left like the rest of the row.
 
