@@ -153,6 +153,15 @@ def end_of_day(v):
     return ts(v)
 
 
+def clean_text(s, limit=100):
+    """Text from somewhere other people can edit, made safe to put on one line of a file that a program (Claude Code
+    included) reads later: one line, no control, invisible or direction-changing characters, a few words long."""
+    import unicodedata
+    s = re.sub(r"\s+", " ", str(s or ""))
+    s = "".join(ch for ch in s if unicodedata.category(ch)[0] != "C").strip()
+    return s[:limit].rstrip() + ("…" if len(s) > limit else "")
+
+
 def safe_url(url):
     """Only web links are kept: a service (or a calendar feed) must not be able to hand Kiln a file: or
     custom-scheme address to open."""

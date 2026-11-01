@@ -5,6 +5,8 @@
   An unsigned or wrongly signed release is ignored and Kiln says so. See [docs/RELEASING.md](docs/RELEASING.md).
 * **Your accounts' details** (Todoist, Jira, ...) stay on your computer in `~/.config/kiln/accounts.json`, readable
   only by you, and are sent only to the service itself. See [docs/ACCOUNTS.md](docs/ACCOUNTS.md).
+* Text that comes from a shared board (task titles) is cleaned before it is written anywhere a program reads later, and the
+  Claude Code hook presents it as untrusted data, never as the user's own request.
 * Kiln has no server and sends no telemetry. The only thing it asks the internet for by itself is the list of
   releases on GitHub (turn it off with `updates.mode: "off"`) and the services you connected.
 

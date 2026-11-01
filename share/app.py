@@ -574,7 +574,7 @@ def todo_delete(idx, path=TODO):
 
 
 def todo_add(txt, path=TODO):
-    txt = txt.strip()
+    txt = " ".join(str(txt).split())              # one line: a newline would start a second item
     if txt:
         ls = read_lines_keep(path)
         ls.append("[ ] " + txt)
@@ -5693,9 +5693,15 @@ def start_task(t):
     q = shlex.quote(branch)
     term.new_tab(repo)
     GLib.timeout_add(700, lambda: (term.run_command(f"git switch {q} 2>/dev/null || git switch -c {q}"), False)[1])
-    f = ptodo_file(repo)                                   # Claude Code sees it in this project's list
-    if t["title"].strip() and all(i["text"] != t["title"].strip() for i in todo_items(f)):
-        todo_add(t["title"].strip(), f)
+    # Claude Code sees the project's list. The title comes from a board other people can edit, so it is cleaned,
+    # shortened and marked "[Lark]", and the hook shows such items as untrusted data (turn this off with
+    # "todo_for_claude": false in the larkbase entry of accounts.json)
+    title = ACC.clean_text(t["title"])
+    if title and cfg.get("todo_for_claude", True) not in (False, "false", "no", "0"):
+        f = ptodo_file(repo)
+        item = f"[Lark] {title}"
+        if all(i["text"] != item for i in todo_items(f)):
+            todo_add(item, f)
     request_mode("coding")
 
 
