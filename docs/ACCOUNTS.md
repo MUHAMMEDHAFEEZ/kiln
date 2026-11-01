@@ -97,6 +97,30 @@ department, who it is for, a due date and a note; `kiln newtask` opens the same 
 The **Tasks** mode (the last chip of the mode switcher, or `kiln mode tasks`) fills the screen with the board: three status
 columns, a card per task, a progress bar and the tabs. Ticking a Lark Base task off in the **Today** card completes it in the Base.
 
+### Start working, Standup and notifications (Lark Base)
+
+* **Start working on a task:** the ▶ on a card in the Tasks mode (or *Start working on this* in the right-click menu)
+  moves the task to *Ongoing*, opens a terminal tab in the project's folder on a branch named after the task
+  (`task/fix-the-login`; it switches to the branch if it already exists and never discards changes), adds the task to
+  that project's todo list (so Claude Code sees it) and shows the terminal. Tell Kiln where each project lives in the
+  Lark Base account, *Project folders*, one per line, the most specific line wins:
+
+  ```
+  SHOP/Backend = ~/code/shop-api
+  SHOP/Flutter = ~/code/shop-app
+  BLOG = ~/code/blog
+  ```
+
+  (`Project/Department`, then `Project`, then `Department`.) Without a match it uses the project shown in the work
+  bar. The branch prefix can be changed with `branch_prefix` in the `larkbase` entry of `accounts.json`.
+* **Standup:** the *Standup* button on the board, or `kiln standup`, writes a note: what you finished since yesterday (since
+  Friday on Mondays), what is *Ongoing* for you, the next three, and important tasks that are past their date. The window
+  lets you edit it and copy it. Lark Base keeps no completion date, so *Done* comes from the tasks Kiln saw turn
+  *Completed* while it was running; it fills up after the first day.
+* **Notifications:** a notification when a task is assigned to you (one note for several), and when one of yours is due
+  today or tomorrow (once per task). Tasks you add from Kiln itself are not announced. Switch it off in Settings → General
+  or with `"notifications": {"tasks": false}`.
+
 ## Notion
 
 Create an internal integration at <https://www.notion.so/profile/integrations>, open your tasks database,

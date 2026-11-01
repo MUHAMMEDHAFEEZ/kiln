@@ -5671,9 +5671,39 @@ def move_task(t, kind):
     threading.Thread(target=work, daemon=True).start()
 
 
+TERM_REF = [None]                         # the desktop terminal (set in main), for "Start working"
+
+
+def start_task(t):
+    """Move the task to Ongoing, open a terminal in its project's folder on a branch named after it, and show the
+    terminal. The folder comes from "Project folders" in the Lark Base account, else the project in the work bar."""
+    kind = status_kind(t.get("status"))
+    if kind == "todo":
+        move_task(t, "doing")
+    cfg = ACC.details("larkbase")
+    repo = ACC.LarkBase.repo_for(cfg, t)
+    if not repo and WORK.get("proj") and os.path.isdir(WORK["proj"]["path"]):
+        repo = WORK["proj"]["path"]
+    term = TERM_REF[0]
+    if not repo or not term:
+        BOARD_NOTE.update(text="Moved to Ongoing. Add this project's folder in Settings → Accounts → Lark Base "
+                               "(Project folders) to open a terminal on a branch.", until=time.time() + 20)
+        return
+    branch = ACC.LarkBase.branch_name(t["title"], t["id"], cfg.get("branch_prefix") or "task/")
+    q = shlex.quote(branch)
+    term.new_tab(repo)
+    GLib.timeout_add(700, lambda: (term.run_command(f"git switch {q} 2>/dev/null || git switch -c {q}"), False)[1])
+    f = ptodo_file(repo)                                   # Claude Code sees it in this project's list
+    if t["title"].strip() and all(i["text"] != t["title"].strip() for i in todo_items(f)):
+        todo_add(t["title"].strip(), f)
+    request_mode("coding")
+
+
 def board_menu(ev, t, redraw):
     kind = status_kind(t.get("status"))
     items = [("Open in Lark", lambda: open_url(t["url"])), (None, None)]
+    if kind != "done":
+        items += [("Start working on this", lambda: (start_task(t), redraw())), (None, None)]
     items += [(f"Move to {STATUS_TITLES[k]}", lambda k=k: (move_task(t, k), redraw())) for k in ("todo", "doing", "done")
               if k != kind]
     items += [(None, None), ("Copy title", lambda: copy_text(t["title"])), ("Copy link", lambda: copy_text(t["url"]))]
@@ -6036,11 +6066,17 @@ class BoardView(BoardBase):
         text(cr, "+  New task", bx + 62, 33, 13, C["on_acc"], bold=True, align="c")
         self.region(("refresh",), bx - 40, 14, 30, 28)
         glyph(cr, "restart", bx - 33, 20, 16, C["text"] if self.hover == ("refresh",) else C["dim"])
+        sx = bx - 40 - 96                                     # "Standup": a note of what you did and what is next
+        self.region(("standup",), sx, 12, 88, 32)
+        rrect(cr, sx, 12, 88, 32, 16)
+        set_rgba(cr, C["ink"], 0.14 if self.hover == ("standup",) else 0.07)
+        cr.fill()
+        text(cr, "Standup", sx + 44, 33, 12.5, C["text"], align="c")
         at = c.get("at")
         if at:
             ago_ = since(at)
-            text(cr, "updated " + ("just now" if ago_ == "now" else f"{ago_} ago"), bx - 50, 33, 11.5, C["dim"], align="r")
-        self.tabs(cr, 150, 14, names, tasks, bx - 190)
+            text(cr, "updated " + ("just now" if ago_ == "now" else f"{ago_} ago"), sx - 12, 33, 11.5, C["dim"], align="r")
+        self.tabs(cr, 150, 14, names, tasks, sx - 150)
         groups = board_groups(tasks, self.tab)
         counts = {k: len(v) for k, v in groups.items()}
         total = sum(counts.values())
@@ -6135,8 +6171,18 @@ class BoardView(BoardBase):
         cr.restore()
         if not ghost:
             self.region(("adv",) + ident, x + w - 34, y + 6, 28, 28)
+            if kind != "done":
+                self.region(("start",) + ident, x + w - 64, y + 6, 28, 28)
+                hot = self.hover == ("start",) + ident
+                cr.new_path()
+                cr.move_to(x + w - 56, y + 14)
+                cr.line_to(x + w - 56, y + 26)
+                cr.line_to(x + w - 46, y + 20)
+                cr.close_path()
+                set_rgba(cr, C["text"] if hot else C["dim"], 0.95 if hot else 0.55)
+                cr.fill()
         self.dot(cr, x + w - 20, y + 20, kind, hot=self.hover == ("adv",) + ident)
-        text_wrap(cr, t["title"] or "(untitled)", x + 16, y + 26, w - 62, 13.5, C["dim"] if kind == "done" else C["text"],
+        text_wrap(cr, t["title"] or "(untitled)", x + 16, y + 26, w - 92, 13.5, C["dim"] if kind == "done" else C["text"],
                   lines=2, strike=kind == "done")
         yy = y + self.CARD_H - 14
         right = self.chips(cr, x, yy, t, x + w - 14, others=False)
@@ -6158,12 +6204,16 @@ class BoardView(BoardBase):
             new_task_window(self.tab)
         elif key[0] == "refresh":
             refresh("accounts")
-        elif key[0] in ("card", "adv"):
+        elif key[0] == "standup":
+            run(["/usr/bin/python3", f"{SHARE}/standup.py", "--window"])
+        elif key[0] in ("card", "adv", "start"):
             kind, j = key[1], key[2]
             items = board_groups(tasks, self.tab or "All").get(kind, [])
             if j < len(items):
                 t = items[j]
-                if key[0] == "adv" and ev.button == 1:
+                if key[0] == "start" and ev.button == 1:
+                    start_task(t)
+                elif key[0] == "adv" and ev.button == 1:
                     move_task(t, {"todo": "doing", "doing": "done", "done": "doing"}[kind])
                 elif ev.button == 3:
                     board_menu(ev, t, self.queue_draw)
@@ -6741,6 +6791,7 @@ def main():
         dock_geo[key] = (dx, dy, dw)
         dock_card[key] = card
     DOCK_ACTIVE.update(dock)
+    TERM_REF[0] = term
     bigboard = None
     if "larkbase" in ACC.connected():                     # the Tasks mode: a board over the whole work area
         bigboard = BoardView(term)

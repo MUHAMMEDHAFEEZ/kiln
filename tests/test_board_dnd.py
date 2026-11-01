@@ -144,6 +144,40 @@ class BoardDragTests(unittest.TestCase):
         self.assertIsNone(v.press)
         self.assertIsNone(v.drag)
 
+    def test_start_working_moves_the_task_opens_a_terminal_on_a_branch_and_notes_it(self):
+        app = self.app
+        repo = f"{self.tmp.name}/repo"
+        os.makedirs(repo)
+        with open(app.ACC.ACCOUNTS_FILE, "w") as f:
+            json.dump({"larkbase": {"link": "https://example.test/base/Tok?table=tblX", "repos": f"SHOP = {repo}"}}, f)
+
+        class FakeTerm:
+            def __init__(self):
+                self.tabs, self.cmds = [], []
+
+            def new_tab(self, path):
+                self.tabs.append(path)
+
+            def run_command(self, cmd):
+                self.cmds.append(cmd)
+        term, modes = FakeTerm(), []
+        app.TERM_REF[0] = term
+        app.request_mode = lambda m: modes.append(m)
+        t = tasks()[0]                                                  # "Plan the launch", not started, project SHOP
+        app.start_task(t)
+        end = time.time() + 2
+        while time.time() < end and not term.cmds:
+            while self.Gtk.events_pending():
+                self.Gtk.main_iteration()
+            time.sleep(0.02)
+        self.assertEqual(self.moves[-1], ("Plan the launch", "doing"))
+        self.assertEqual(term.tabs, [repo])
+        self.assertEqual(term.cmds, ["git switch task/plan-the-launch 2>/dev/null || git switch -c task/plan-the-launch"])
+        self.assertEqual(modes, ["coding"])
+        self.assertTrue(any(i["text"] == "Plan the launch" for i in app.todo_items(app.ptodo_file(repo))))
+        app.start_task(tasks()[1])                                      # already ongoing: no move, same folder rules
+        self.assertEqual(len(self.moves), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

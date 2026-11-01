@@ -20,6 +20,7 @@
   "performance": "auto",
   "updates": { "mode": "notify" },
   "cards": { "agenda": true },
+  "notifications": { "tasks": true },
   "week_start": "sun",
 
   "integrations": { "github": true, "lark": false, "claude_code": true },

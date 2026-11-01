@@ -44,6 +44,8 @@ def list_to_project(cfg, name):
 
 def create_and_sync(svc, cfg, **kw):
     rid = svc.create(cfg, **kw)
+    if rid:
+        A.remember_created(rid)
     A.sync("larkbase")
     return rid
 

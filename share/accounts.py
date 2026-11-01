@@ -597,7 +597,9 @@ class LarkBase(Service):
     can_complete = True
     fields = [Field("link", "Base link", hint="the link of the table, from your browser"),
               Field("lists", "Lists", multiline=True, optional=True,
-                    hint="one per line, like  SHOP = PROJECTS: SHOP   or   Mine = Task leader: me")]
+                    hint="one per line, like  SHOP = PROJECTS: SHOP   or   Mine = Task leader: me"),
+              Field("repos", "Project folders", multiline=True, optional=True,
+                    hint="where \u201cStart working\u201d opens a terminal, like  SHOP/Backend = ~/code/shop-api  or  BLOG = ~/code/blog")]
     steps = ["Once, in a terminal: lark-cli auth login --scope \"base:app:read base:table:read base:field:read "
              "base:record:read base:view:read\" (read only).",
              "Open your tasks table in Lark and copy the link from the address bar.",
@@ -605,7 +607,8 @@ class LarkBase(Service):
              "Leave it empty for one list per project plus yours."]
     link = "https://github.com/larksuite/cli"
     DEFAULT_FIELDS = dict(title="Task", status="Status", owner="Task leader", project="PROJECTS",
-                          priority="Priority", due="Estimate Deadline", due2="End Date", dept="Departments")
+                          priority="Priority", due="Estimate Deadline", due2="End Date", dept="Departments",
+                          notes="Progress notes")
     DONE = ("completed", "done", "closed", "complete")
     ACTIVE = ("ongoing", "in progress", "doing", "started")
 
@@ -687,6 +690,72 @@ class LarkBase(Service):
     # ---- writing (needs: lark-cli auth login --scope "base:record:create base:record:update")
     WRITE_HELP = ("Kiln needs permission to change this table. Run: lark-cli auth login --scope "
                   "\"base:record:create base:record:update\"")
+
+    @classmethod
+    def kind(cls, status):
+        """'todo', 'doing' or 'done' for the text of a status."""
+        s = (status or "").strip().lower()
+        return "done" if s in cls.DONE else "doing" if s in cls.ACTIVE else "todo"
+
+    @staticmethod
+    def branch_name(title, record_id, prefix="task/"):
+        """A git branch name for a task: task/fix-the-login (Arabic and other non-latin letters are dropped)."""
+        import unicodedata
+        plain = unicodedata.normalize("NFKD", title or "").encode("ascii", "ignore").decode().lower()
+        slug = re.sub(r"[^a-z0-9]+", "-", plain).strip("-")[:40].strip("-")
+        if len(slug) < 3:                                           # nothing usable in the title: keep it unique
+            slug = (slug + "-" if slug else "") + str(record_id)[-6:].lower()
+        return prefix + slug
+
+    @staticmethod
+    def repo_for(cfg, task):
+        """The folder to work in for a task, from the 'Project folders' lines (SHOP/Backend = ~/code/shop-api,
+        SHOP = ~/code/shop, Backend = ~/code/api); the most specific line wins. None when nothing matches."""
+        rules = {}
+        for line in (cfg.get("repos") or "").splitlines():
+            name, sep, path = line.partition("=")
+            if sep and name.strip() and path.strip():
+                rules[name.strip().lower()] = os.path.expanduser(path.strip())
+        proj = (task.get("project") or "").split(",")[0].strip().lower()
+        dept = (task.get("detail") or "").split(",")[0].strip().lower()
+        for key in (f"{proj}/{dept}", proj, dept):
+            if key and key != "/" and rules.get(key) and os.path.isdir(rules[key]):
+                return rules[key]
+        return None
+
+    def track(self, old, entry, now=None):
+        """After a sync: remember what changed (for the standup) and tell you about it."""
+        now = now or time.time()
+        changes = status_changes(old.get("tasks"), entry.get("tasks") or [], now)
+        history = [c for c in (old.get("changes") or []) if now - c.get("at", 0) < 14 * 86400] + changes
+        entry["changes"] = history[-500:]
+        if not notifications_on():
+            return
+        me, told = entry.get("me") or "", list(old.get("notified") or [])
+        skip = created_recently()
+        fresh = []
+        for c in changes:
+            gained = c["owners"] if c["kind"] == "new" else c.get("added", []) if c["kind"] == "owners" else []
+            key = f"assigned:{c['id']}"
+            if me and me in gained and c["id"] not in skip and key not in told:
+                fresh.append(c)
+                told.append(key)
+        if len(fresh) == 1:
+            notify(f"Assigned to you: {fresh[0]['title']}", (fresh[0].get("project") or "Lark Base") + " · " + fresh[0]["to"])
+        elif fresh:
+            notify(f"{len(fresh)} tasks assigned to you", "\n".join(c["title"] for c in fresh[:5]))
+        today = datetime.date.fromtimestamp(now)
+        for t in entry.get("tasks") or []:
+            due = t.get("due")
+            if not due or t.get("done") or me not in (t.get("owners") or []) or not now < due <= now + 36 * 3600:
+                continue
+            key = f"due:{t['id']}:{int(due)}"
+            if key in told:
+                continue
+            told.append(key)
+            when = "today" if datetime.date.fromtimestamp(due) == today else "tomorrow"
+            notify(f"Due {when}: {t['title']}", ((t.get("project") or "") + " · " + (t.get("priority") or "")).strip(" ·"))
+        entry["notified"] = told[-300:]
 
     def _fieldmap(self, cfg):
         fm = dict(self.DEFAULT_FIELDS)
@@ -809,7 +878,8 @@ class LarkBase(Service):
             owners = self.values(r.get(fm["owner"]))
             t = task(self.id, rid, title, due, f"{base_url}?table={table}&record={rid}",
                      ", ".join(self.values(r.get(fm["dept"]))))
-            t.update(groups=groups, status=status, done=done, owners=owners,
+            note = (self.values(r.get(fm["notes"])) or [""])[0]
+            t.update(groups=groups, status=status, done=done, owners=owners, note=note[:300],
                      priority=(self.values(r.get(fm["priority"])) or [""])[0],
                      project=", ".join(self.values(r.get(fm["project"]))),
                      # the Today card gets only what you are working on right now
@@ -1118,9 +1188,15 @@ def sync(only=None):
         entry = dict(old.get(sid) or {})
         try:
             data = svc.fetch(cfg)
+            before = dict(entry)
             entry.update(ok=True, error=None, tasks=data["tasks"], events=data["events"], at=time.time(),
                          lists=data.get("lists") or [], me=data.get("me") or "",
                          me_id=data.get("me_id") or "", people=data.get("people") or {})
+            if hasattr(svc, "track"):
+                try:
+                    svc.track(before, entry)
+                except Exception:                         # noqa: BLE001  (a notification problem must not lose the sync)
+                    pass
         except ServiceError as e:
             entry.update(ok=False, error=str(e), at=time.time())
             entry.setdefault("tasks", [])
@@ -1132,6 +1208,64 @@ def sync(only=None):
         result[sid] = entry
     write_private(CACHE_FILE, {"updated": time.time(), "services": result})
     return result
+
+
+def notify(title, body):
+    if shutil.which("notify-send"):
+        subprocess.run(["notify-send", "-a", "Kiln", "-i", "kiln", title, body], capture_output=True, timeout=10)
+
+
+def notifications_on(kind="tasks"):
+    try:
+        with open(f"{CONF}/config.json", encoding="utf-8") as f:
+            return bool(((json.load(f).get("notifications")) or {}).get(kind, True))
+    except (OSError, ValueError, AttributeError):
+        return True
+
+
+CREATED_FILE = f"{CACHE}/created-recent.json"
+
+
+def remember_created(record_id):
+    """Tasks added from Kiln itself: no 'assigned to you' notification for those a moment later."""
+    try:
+        with open(CREATED_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        d = {}
+    d = {k: v for k, v in d.items() if time.time() - v < 900}
+    d[record_id] = time.time()
+    write_private(CREATED_FILE, d)
+
+
+def created_recently():
+    try:
+        with open(CREATED_FILE, encoding="utf-8") as f:
+            return {k for k, v in json.load(f).items() if time.time() - v < 900}
+    except (OSError, ValueError):
+        return set()
+
+
+def status_changes(old_tasks, new_tasks, now):
+    """What happened between two syncs: new tasks, status changes and people added to a task. Nothing on the
+    very first sync (everything would look new)."""
+    if not old_tasks:
+        return []
+    prev = {t["id"]: t for t in old_tasks}
+    out = []
+    for t in new_tasks:
+        o = prev.get(t["id"])
+        base_ = dict(id=t["id"], title=t["title"], at=now, owners=list(t.get("owners") or []),
+                     project=t.get("project", ""))
+        if o is None:
+            out.append(dict(base_, kind="new", frm=None, to=t.get("status", "")))
+            continue
+        if (o.get("status") or "") != (t.get("status") or ""):
+            out.append(dict(base_, kind="status", frm=o.get("status", ""), to=t.get("status", "")))
+        added = [x for x in t.get("owners") or [] if x not in (o.get("owners") or [])]
+        if added:
+            out.append(dict(base_, kind="owners", frm=None, to=t.get("status", ""), added=added))
+    return out
 
 
 def missing(service, values):

@@ -47,6 +47,7 @@ DEFAULTS = {
     "performance": "auto",
     "updates": {"mode": "notify"},
     "cards": {"agenda": True},
+    "notifications": {"tasks": True},
     "integrations": {"github": True, "lark": False, "claude_code": True},
     "theme_apply": {"gtk": True, "dock": True, "gnome_terminal": True, "wallpaper": True},
 }
@@ -483,6 +484,8 @@ class Settings(Gtk.Window):
                                 "computers with two cores or less than 4 GB of memory."), False, False, 0)
         box.pack_start(self.switch("cards.agenda", "Agenda card", "Today's meetings from your calendars. Turn it off and "
                                    "the Today card uses the room (restart Kiln to apply)."), False, False, 0)
+        box.pack_start(self.switch("notifications.tasks", "Task notifications", "A notification when a task is assigned "
+                                   "to you in Lark Base, or when one of yours is due today or tomorrow."), False, False, 0)
         box.pack_start(label("Cards on big screens", "kiln-section"), False, False, 0)
         box.pack_start(label("Kiln places the cards that fit in the free space next to the terminal. "
                              "A laptop screen has none.", "kiln-sub", wrap=True), False, False, 0)

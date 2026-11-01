@@ -6,6 +6,9 @@
   working on also shows in Today. See `docs/ACCOUNTS.md`.
 * The board shows a status bar and filter in red (not started), yellow (ongoing) and green (completed). You can add a task
   (`+ New task`, `kiln newtask`), move a task between statuses (click its dot, or right-click) and complete it from Today.
+* **Start working** on a task (▶ on the card): moves it to Ongoing, opens a terminal in the project's folder on a branch named
+  after the task and adds it to the project's todo list. **Standup** note (`kiln standup`, a button on the board) from what
+  you finished, what is ongoing and what is next. **Notifications** for tasks assigned to you and deadlines today or tomorrow.
 * A **Tasks mode** (fourth chip of the mode switcher): the whole screen is the board, a column per status. Drag a card to
   another column to change its status; the column it would land in lights up.
 * The Agenda card can be turned off (`cards.agenda`); Today then uses its room and shows more tasks.
