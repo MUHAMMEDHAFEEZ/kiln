@@ -63,7 +63,7 @@ DEFAULT_CONFIG = {
     "terminal": {"project_commands": True},
     "modes": {"focus_mutes_notifications": True},
     "icons": {"recent_dot": True, "recent_hours": 48},
-    "dock": {"cards": ["git", "system", "day", "notes", "tests"], "position": "left"},
+    "dock": {"cards": ["git", "board", "system", "day", "notes", "tests"], "position": "left"},
     "week_start": "sun",
     "performance": "auto",
     "updates": {"mode": "notify"},
@@ -246,8 +246,8 @@ def text(cr, s, x, y, size, color, bold=False, align="l", maxw=None, alpha=1.0, 
     fd.set_absolute_size(size * Pango.SCALE)
     lay.set_font_description(fd)
     lay.set_text(str(s), -1)
-    if maxw:
-        lay.set_width(int(maxw * Pango.SCALE))
+    if maxw and lay.get_pixel_size()[0] > maxw:       # only text that does not fit gets a box and an ellipsis,
+        lay.set_width(int(maxw * Pango.SCALE))         # so Arabic titles start at the left like every other row
         lay.set_ellipsize(Pango.EllipsizeMode.END)
     w, _h = lay.get_pixel_size()
     base = lay.get_baseline() / Pango.SCALE
@@ -916,6 +916,8 @@ def load_account_tasks():
         if sid not in ACC.SERVICES:
             continue
         for t in c.get("tasks") or []:
+            if not t.get("today", True):
+                continue
             out.append(dict(key=f"{sid}:{t['id']}", guid=t["id"], service=sid, text=t["title"], due=t.get("due"),
                             url=t.get("url", ""), detail=t.get("detail", ""), source="account", done=False))
     return out
@@ -5596,6 +5598,146 @@ class TestsCard(DockCard):
                 term_run(self.terminal, proj["path"], f"less -R +G {shlex.quote(log)}")
 
 
+# --- Tasks: one table (Lark Base) as tabs, e.g. SHOP, BLOG and your own
+class BoardCard(DockCard):
+    KEY, TITLE, ICON, PREF_W = "board", "Tasks", "check-circle", 520
+    ROW = 34
+    STATUS_RANK = {"ongoing": 0, "in progress": 0, "doing": 0}
+
+    def __init__(self, terminal=None):
+        super().__init__(terminal)
+        self.tab, self.show_done, self.off, self._shown = None, False, 0, []
+        self.add_events(Gdk.EventMask.SCROLL_MASK)
+        self.connect("scroll-event", self._scroll)
+
+    def _scroll(self, _w, ev):
+        step = 1 if ev.direction == Gdk.ScrollDirection.DOWN else -1 if ev.direction == Gdk.ScrollDirection.UP else 0
+        if step:
+            self.off = max(0, self.off + step)
+            self.queue_draw()
+        return True
+
+    def body(self, cr, w, h):
+        if "larkbase" not in ACC.connected():
+            text(cr, "Connect a Lark Base to see its tasks", 24, 90, 13.5, C["text"])
+            text(cr, "Tabs for each project, and yours.", 24, 112, 12, C["dim"])
+            self.region(("connect",), 14, 126, w - 28, 40)
+            rrect(cr, 20, 132, w - 40, 30, 10)
+            set_rgba(cr, C["acc"], 1 if self.hover == ("connect",) else 0.9)
+            cr.fill()
+            text(cr, "Open account settings", w / 2, 152, 13, C["on_acc"], bold=True, align="c")
+            return
+        c = accounts_data().get("larkbase") or {}
+        tasks = c.get("tasks") or []
+        names = c.get("lists") or sorted({g for t in tasks for g in t.get("groups", [])})
+        if not names:
+            text(cr, c.get("error") or "Loading tasks…", 24, 90, 13, C["dim"], maxw=w - 48)
+            return
+        if self.tab not in names:
+            self.tab, self.off = names[0], 0
+        me = c.get("me") or ""
+        # tabs
+        x = 20
+        for name in names:
+            mine = [t for t in tasks if name in t.get("groups", []) and not t.get("done")]
+            on = name == self.tab
+            tw = text(cr, name, 0, -100, 13, C["text"], bold=on)          # measure only
+            bw = tw + 30 + len(str(len(mine))) * 7
+            if x + bw > w - 20:
+                break
+            self.region(("tab", name), x, 50, bw, 28)
+            if on:
+                rrect(cr, x, 50, bw, 28, 14)
+                set_rgba(cr, C["acc"], 0.18)
+                cr.fill()
+            text(cr, name, x + 12, 69, 13, C["text"] if on else C["dim"], bold=on)
+            text(cr, str(len(mine)), x + 18 + tw, 69, 11, C["acc"] if on else C["dim"])
+            x += bw + 6
+        hline(cr, 20, w - 20, 88)
+        # rows of the current tab
+        group = [t for t in tasks if self.tab in t.get("groups", [])]
+        opened = [t for t in group if not t.get("done")]
+        shown = group if self.show_done else opened
+        shown = sorted(shown, key=lambda t: (t.get("done", False), self.STATUS_RANK.get(t.get("status", "").lower(), 1),
+                                              0 if t.get("priority", "").lower() == "important" else 1,
+                                              t.get("due") or 9e12, t["title"].lower()))
+        ongoing = sum(1 for t in opened if t.get("status", "").lower() in self.STATUS_RANK)
+        text(cr, f"{len(opened)} open · {ongoing} ongoing", w - 20, 34, 12, C["dim"], align="r")
+        rows = max(1, int((h - 104 - 36) // self.ROW))
+        self.off = max(0, min(self.off, max(0, len(shown) - rows)))
+        self._shown = shown
+        if not shown:
+            text(cr, "Nothing open here. ", 24, 124, 13.5, C["dim"])
+        for slot in range(rows):
+            i = self.off + slot
+            if i >= len(shown):
+                break
+            t = shown[i]
+            y = 98 + slot * self.ROW
+            self.region(("task", i), 10, y, w - 20, self.ROW - 2)
+            cy = y + self.ROW / 2 - 1
+            st = t.get("status", "").lower()
+            cr.new_path()
+            if t.get("done"):
+                set_rgba(cr, C["green"], 0.9)
+                cr.arc(28, cy, 6.5, 0, 2 * math.pi)
+                cr.fill()
+            elif st in self.STATUS_RANK:
+                set_rgba(cr, C["amber"], 1)
+                cr.arc(28, cy, 6.5, 0, 2 * math.pi)
+                cr.fill()
+            else:
+                cr.set_line_width(1.6)
+                set_rgba(cr, C["dim"], 0.9)
+                cr.arc(28, cy, 6, 0, 2 * math.pi)
+                cr.stroke()
+            right = w - 22
+            if t.get("priority", "").lower() == "important" and not t.get("done"):
+                right -= pill(cr, right, cy + 4, "Important", 10, C["red"], align="r") + 6
+            if t.get("due") and not t.get("done"):
+                lbl, col = due_label(t["due"], clock=False)
+                right -= pill(cr, right, cy + 4, lbl, 10, col, align="r") + 6
+            others = [o for o in t.get("owners", []) if o != me]
+            if others and self.tab.lower() not in ("mine", "me"):
+                right -= text(cr, others[0].split()[0] + (f" +{len(others) - 1}" if len(others) > 1 else ""), right,
+                              cy + 4, 11, C["dim"], align="r", maxw=90) + 8
+            text(cr, t["title"] or "(untitled)", 46, cy + 5, 13.5, C["dim"] if t.get("done") else C["text"],
+                 maxw=right - 46 - 6, strike=bool(t.get("done")))
+        # scroll bar and footer
+        if len(shown) > rows:
+            track = rows * self.ROW - 6
+            rrect(cr, w - 9, 100, 3, track, 1.5)
+            set_rgba(cr, C["ink"], 0.10)
+            cr.fill()
+            hh = max(18, track * rows / len(shown))
+            rrect(cr, w - 9, 100 + (track - hh) * self.off / max(1, len(shown) - rows), 3, hh, 1.5)
+            set_rgba(cr, C["acc"], 0.7)
+            cr.fill()
+        self.region(("done",), 14, h - 34, 150, 26)
+        text(cr, ("Hide" if self.show_done else "Show") + " completed", 24, h - 16, 11.5,
+             C["acc"] if self.hover == ("done",) else C["dim"])
+        age = c.get("at")
+        if age:
+            ago_ = since(age)
+            text(cr, "updated " + ("just now" if ago_ == "now" else f"{ago_} ago"), w - 20, h - 16, 11, C["dim"], align="r")
+
+    def activate(self, key, ev):
+        if key[0] == "tab":
+            self.tab, self.off = key[1], 0
+        elif key[0] == "done":
+            self.show_done, self.off = not self.show_done, 0
+        elif key[0] == "connect":
+            run(["/usr/bin/python3", f"{SHARE}/settings.py", "accounts"])
+        elif key[0] == "task" and key[1] < len(self._shown):
+            t = self._shown[key[1]]
+            if ev.button == 3:
+                popup_menu(ev, [("Open in Lark", lambda: open_url(t["url"])), (None, None),
+                                ("Copy title", lambda: copy_text(t["title"])), ("Copy link", lambda: copy_text(t["url"]))])
+            elif t.get("url"):
+                open_url(t["url"])
+        self.queue_draw()
+
+
 # --- Today: a month calendar, the Hijri date and prayer times
 class DayCard(DockCard):
     KEY, TITLE, ICON, PREF_W = "day", "Today", "calendar", 640
@@ -5819,9 +5961,9 @@ class NotesCard(Gtk.Box):
 
 
 # --- where the cards go: row 1 runs to the right edge, row 2 stops at the Focus card
-DOCK_ORDER = ["git", "system", "day", "notes", "tests", "services"]
-DOCK_MIN = {"git": 460, "system": 420, "services": 380, "day": 560, "notes": 320, "tests": 380}
-DOCK_PREF = {"git": 620, "system": 520, "services": 520, "day": 640, "notes": 430, "tests": 500}
+DOCK_ORDER = ["git", "board", "system", "notes", "tests", "day", "services"]
+DOCK_MIN = {"git": 460, "board": 400, "system": 420, "services": 380, "day": 560, "notes": 320, "tests": 380}
+DOCK_PREF = {"git": 620, "board": 520, "system": 520, "services": 520, "day": 640, "notes": 430, "tests": 500}
 DOCK_ACTIVE = set()              # the cards actually placed on this screen (the clock card looks at it)
 
 
@@ -6144,12 +6286,16 @@ def main():
     w6 = make_window("Kiln Workbar", qbar, g.x + L["bar"][0], g.y + L["bar"][1], WorkBar.W, WorkBar.H)
 
     # dock cards: whatever fits in the free space of a big screen (nothing on a small one)
-    wanted = [k for k in DOCK_ORDER if k in ((CFG.get("dock") or {}).get("cards") or [])]
+    cards_cfg = (CFG.get("dock") or {}).get("cards") or []
+    wanted = [k for k in DOCK_ORDER if k in cards_cfg and (k != "board" or "larkbase" in ACC.connected())]
+    if "board" not in wanted:                    # without a board the cards keep their older order
+        wanted = [k for k in ("git", "system", "day", "notes", "tests", "services") if k in wanted]
     specs = {k: (DOCK_MIN[k], DOCK_PREF[k]) for k in DOCK_ORDER}
     specs["day"] = DayCard.specs()
     makers = {"git": lambda: GitCard(term), "system": lambda: SystemCard(term),
               "services": lambda: ServicesCard(term, qbar), "day": lambda: DayCard(term),
-              "notes": lambda: NotesCard(term), "tests": lambda: TestsCard(term, qbar)}
+              "notes": lambda: NotesCard(term), "tests": lambda: TestsCard(term, qbar),
+              "board": lambda: BoardCard(term)}
     dock, dock_geo, dock_card = {}, {}, {}
     for key, dx, dy, dw in plan_dock(L, wanted, specs):
         card = makers[key]()
@@ -6224,7 +6370,7 @@ def main():
         name = name if name in MODES else "overview"
         state["mode"] = name
         top, gap, bar_y, left = ex["top"], ex["gap"], ex["bar_y"], ex["left"]
-        side = [k for k in ("git", "tests", "notes") if k in dock]       # the project's own cards
+        side = [k for k in ("git", "board", "tests", "notes") if k in dock]       # the project's own cards
         arrange = {}                                                     # dock card -> (x, y, w, h)
         veil = False
         term.alpha, pt = 0.80, 11

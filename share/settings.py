@@ -42,7 +42,7 @@ DEFAULTS = {
     "terminal": {"project_commands": True},
     "modes": {"focus_mutes_notifications": True},
     "icons": {"recent_dot": True, "recent_hours": 48},
-    "dock": {"cards": ["git", "system", "day", "notes", "tests"], "position": "left"},
+    "dock": {"cards": ["git", "board", "system", "day", "notes", "tests"], "position": "left"},
     "week_start": "sun",
     "performance": "auto",
     "updates": {"mode": "notify"},
@@ -497,6 +497,7 @@ class Settings(Gtk.Window):
                                  ("system", "System", "CPU, memory, GPU, network, disk and the busiest programs."),
                                  ("day", "Today", "Calendar, Hijri date and prayer times (set your city under Lock screen & prayer)."),
                                  ("notes", "Notes", "A scratchpad for each project, and a global one."),
+                                 ("board", "Tasks board", "A Lark Base table as tabs, like your projects and yours (connect it under Accounts)."),
                                  ("tests", "Tests", "Result and output of the last test run, with a run button."),
                                  ("services", "Running", "Dev servers and containers (the work bar already shows them).")):
             sw = Gtk.Switch(active=key in self.cfg["dock"]["cards"])
@@ -569,7 +570,7 @@ class Settings(Gtk.Window):
             run_quiet("gsettings", "set", "org.gnome.shell.extensions.dash-to-dock", "dock-position", pos.upper())
 
     def toggle_dock(self, key, on):
-        order = ["git", "system", "day", "notes", "tests", "services"]
+        order = ["git", "board", "system", "day", "notes", "tests", "services"]
         cards = {c for c in self.cfg["dock"]["cards"] if c != key}
         if on:
             cards.add(key)

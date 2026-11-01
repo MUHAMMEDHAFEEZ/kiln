@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+* **Lark Base**: a new service and a **Tasks board** card with a tab per list (projects, your own tasks); what you are
+  working on also shows in Today. Read only. See `docs/ACCOUNTS.md`.
+* Arabic text that fits its space now starts at the left like the rest of the row.
+
 ## 1.2.1 (2026-10-25)
 
 * Updates are signed: Kiln installs a release only when it carries the maintainer's signature (checked with

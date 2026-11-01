@@ -590,6 +590,154 @@ class Calendar(Service):
         return {"tasks": [], "events": out}
 
 
+class LarkBase(Service):
+    id, name, color = "larkbase", "Lark Base", "00d6b9"
+    tagline = "A tasks table from a Lark Base, split into lists (projects, people)"
+    kinds = ("tasks",)
+    fields = [Field("link", "Base link", hint="the link of the table, from your browser"),
+              Field("lists", "Lists", multiline=True, optional=True,
+                    hint="one per line, like  SHOP = PROJECTS: SHOP   or   Mine = Task leader: me")]
+    steps = ["Once, in a terminal: lark-cli auth login --scope \"base:app:read base:table:read base:field:read "
+             "base:record:read base:view:read\" (read only).",
+             "Open your tasks table in Lark and copy the link from the address bar.",
+             "Optional: make lists. Each line is  Name = Field: value  (use “me” for your own tasks). "
+             "Leave it empty for one list per project plus yours."]
+    link = "https://github.com/larksuite/cli"
+    DEFAULT_FIELDS = dict(title="Task", status="Status", owner="Task leader", project="PROJECTS",
+                          priority="Priority", due="Estimate Deadline", due2="End Date", dept="Departments")
+    DONE = ("completed", "done", "closed", "complete")
+    ACTIVE = ("ongoing", "in progress", "doing", "started")
+
+    def _cli(self, *args):
+        exe = shutil.which("lark-cli") or f"{HOME}/.local/bin/lark-cli"
+        if not os.path.exists(exe):
+            raise ServiceError("lark-cli is not installed (github.com/larksuite/cli).")
+        try:
+            r = subprocess.run([exe, *args], capture_output=True, text=True, timeout=90)
+        except (OSError, subprocess.SubprocessError):
+            raise ServiceError("lark-cli did not answer.") from None
+        raw = r.stdout
+        try:
+            d = json.loads(raw[raw.index("{"):raw.rindex("}") + 1])
+        except ValueError:
+            raise ServiceError("lark-cli sent something Kiln does not understand.") from None
+        if d.get("ok") is False:
+            e = d.get("error") or {}
+            if e.get("subtype") == "missing_scope":
+                raise ServiceError("Kiln needs read access to Lark Base. Run: lark-cli auth login --scope "
+                                   "\"base:app:read base:table:read base:field:read base:record:read base:view:read\"")
+            if e.get("type") in ("authentication", "authorization"):
+                raise ServiceError("Sign in to Lark again: lark-cli auth login")
+            if e.get("subtype") == "not_found" or "not_found" in str(e.get("message", "")):
+                raise ServiceError("Lark could not find that table. Check the link and your access to it.")
+            raise ServiceError("Lark said: " + str(e.get("message", "error"))[:160])
+        return d.get("data") or {}
+
+    @staticmethod
+    def parse_link(link):
+        """(base token, table id, base url) from a Base address."""
+        u = urllib.parse.urlparse((link or "").strip())
+        m = re.search(r"/base/([A-Za-z0-9]+)", u.path)
+        table = (urllib.parse.parse_qs(u.query).get("table") or [""])[0]
+        if not m or not table.startswith("tbl"):
+            raise ServiceError("Paste the link of one table (it contains /base/… and ?table=tbl…).")
+        return m.group(1), table, f"{u.scheme}://{u.netloc}/base/{m.group(1)}"
+
+    def me(self):
+        try:
+            raw = subprocess.run([shutil.which("lark-cli") or "lark-cli", "auth", "status"], capture_output=True,
+                                 text=True, timeout=30).stdout
+            u = (json.loads(raw[raw.index("{"):raw.rindex("}") + 1]).get("identities") or {}).get("user") or {}
+            return u.get("openId", ""), (u.get("userName") or "").strip()
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return "", ""
+
+    def check(self, cfg):
+        base, table, _url = self.parse_link(cfg.get("link"))
+        info = self._cli("base", "+base-get", "--base-token", base, "--as", "user")
+        self._cli("base", "+record-list", "--base-token", base, "--table-id", table, "--limit", "1",
+                  "--format", "json", "--as", "user")
+        return (info.get("base") or {}).get("name") or "Lark Base"
+
+    @staticmethod
+    def parse_lists(text):
+        out = []
+        for line in (text or "").splitlines():
+            name, sep, rule = line.partition("=")
+            field, sep2, vals = rule.partition(":")
+            if sep and sep2 and name.strip() and field.strip():
+                out.append((name.strip(), field.strip(), [v.strip().lower() for v in vals.split(",") if v.strip()]))
+        return out
+
+    @staticmethod
+    def values(v):
+        """Plain strings of a cell: text, select options, people, dates."""
+        if v is None:
+            return []
+        if isinstance(v, list):
+            out = []
+            for x in v:
+                out += LarkBase.values(x)
+            return out
+        if isinstance(v, dict):
+            return [str(v["name"]).strip()] if v.get("name") else ([str(v["text"]).strip()] if v.get("text") else [])
+        return [str(v).strip()] if str(v).strip() else []
+
+    def fetch(self, cfg):
+        base, table, base_url = self.parse_link(cfg.get("link"))
+        rows, offset = [], 0
+        for _ in range(8):
+            d = self._cli("base", "+record-list", "--base-token", base, "--table-id", table, "--limit", "200",
+                          "--offset", str(offset), "--format", "json", "--as", "user")
+            names = d.get("fields") or []
+            for rid, cells in zip(d.get("record_id_list") or [], d.get("data") or []):
+                rows.append((rid, dict(zip(names, cells))))
+            if not d.get("has_more"):
+                break
+            offset += 200
+        fm = dict(self.DEFAULT_FIELDS)
+        fm.update({k: cfg[f"{k}_field"] for k in self.DEFAULT_FIELDS if cfg.get(f"{k}_field")})
+        my_id, my_name = self.me()
+        lists = self.parse_lists(cfg.get("lists"))
+        if not lists:                                               # one list per project, plus yours
+            projects = []
+            for _rid, r in rows:
+                for v in self.values(r.get(fm["project"])):
+                    if v not in projects:
+                        projects.append(v)
+            lists = [("Mine", fm["owner"], ["me"])] + [(p, fm["project"], [p.lower()]) for p in projects[:6]]
+
+        def mine(cell):
+            for x in cell if isinstance(cell, list) else []:
+                if isinstance(x, dict) and (x.get("id") == my_id or (my_name and x.get("name") == my_name)):
+                    return True
+            return False
+
+        out = []
+        for rid, r in rows:
+            status = (self.values(r.get(fm["status"])) or [""])[0]
+            done = status.lower() in self.DONE
+            groups = []
+            for name, field, wanted in lists:
+                cell = r.get(field)
+                if "me" in wanted and mine(cell) or any(v.lower() in wanted for v in self.values(cell)):
+                    groups.append(name)
+            if not groups:
+                continue
+            title = (self.values(r.get(fm["title"])) or ["(untitled)"])[0]
+            due = ts((self.values(r.get(fm["due"])) or self.values(r.get(fm["due2"])) or [None])[0])
+            owners = self.values(r.get(fm["owner"]))
+            t = task(self.id, rid, title, due, f"{base_url}?table={table}&record={rid}",
+                     ", ".join(self.values(r.get(fm["dept"]))))
+            t.update(groups=groups, status=status, done=done, owners=owners,
+                     priority=(self.values(r.get(fm["priority"])) or [""])[0],
+                     project=", ".join(self.values(r.get(fm["project"]))),
+                     # the Today card gets only what you are working on right now
+                     today=bool(not done and status.lower() in self.ACTIVE and mine(r.get(fm["owner"]))))
+            out.append(t)
+        return {"tasks": out, "events": [], "lists": [n for n, _f, _v in lists], "me": my_name}
+
+
 class Lark(Service):
     id, name, tagline, color = "lark", "Lark", "Tasks and meetings through the official lark-cli", "00d6b9"
     kinds = ("tasks", "events")
@@ -677,7 +825,7 @@ class Lark(Service):
 
 
 SERVICES = {s.id: s for s in (Calendar(), Todoist(), Trello(), Linear(), Asana(), Jira(), Notion(), ClickUp(),
-                              Slack(), Lark())}
+                              Slack(), Lark(), LarkBase())}
 
 
 # ----------------------------------------------------------------- iCal
@@ -884,7 +1032,8 @@ def sync(only=None):
         entry = dict(old.get(sid) or {})
         try:
             data = svc.fetch(cfg)
-            entry.update(ok=True, error=None, tasks=data["tasks"], events=data["events"], at=time.time())
+            entry.update(ok=True, error=None, tasks=data["tasks"], events=data["events"], at=time.time(),
+                         lists=data.get("lists") or [], me=data.get("me") or "")
         except ServiceError as e:
             entry.update(ok=False, error=str(e), at=time.time())
             entry.setdefault("tasks", [])

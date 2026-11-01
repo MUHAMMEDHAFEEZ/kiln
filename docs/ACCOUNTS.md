@@ -23,6 +23,7 @@ From a terminal: `kiln accounts` lists them, `kiln connect todoist` asks for the
 | **ClickUp** | Personal API token | Open tasks assigned to you | yes |
 | **Slack** | User token (see below) | Your reminders (`/remind me to …`) | yes |
 | **Lark** | Nothing: set up `lark-cli` once (see its page) | Tasks and meetings | yes |
+| **Lark Base** | The link of a tasks table, and optional lists (see below) | The **Tasks board** card, with a tab per list, and what you are working on in Today | no (read only) |
 
 Each task carries a small label with its service. Click a task to open it in the service, right-click for
 *Mark complete* and *Copy*. Tasks refresh every two minutes.
@@ -56,6 +57,32 @@ Slack's old personal tokens are retired, so you make a small app for yourself on
    ```
 2. **Install to Workspace**, then copy the **User OAuth Token** (it starts with `xoxp-`).
 3. Paste it in Kiln.
+
+## Lark Base (the Tasks board)
+
+For a team's tasks table in Lark Base. Log in to `lark-cli` once with read-only access:
+
+```bash
+lark-cli auth login --scope "base:app:read base:table:read base:field:read base:record:read base:view:read"
+```
+
+Then connect **Lark Base** in Settings → Accounts and paste the link of the table (the address bar while the table is open;
+it contains `/base/…` and `?table=tbl…`). Kiln adds a **Tasks** card on big screens with one tab for each list, and puts
+the tasks assigned to you that are *Ongoing* in the Today card.
+
+Lists are one per line, `Name = Field: value`, and `me` means your own tasks:
+
+```
+SHOP = PROJECTS: SHOP
+BLOG = PROJECTS: BLOG
+Ada = Task leader: me
+```
+
+Leave it empty to get one list per project plus yours. Kiln expects columns called *Task*, *Status*, *Task leader*,
+*PROJECTS*, *Priority*, *Estimate Deadline* (or *End Date*) and *Departments*. If yours are named differently, add
+`title_field`, `status_field`, `owner_field`, `project_field`, `priority_field`, `due_field` or `dept_field` to the
+`larkbase` entry of `~/.config/kiln/accounts.json`. Done statuses are *Completed*, *Done*, *Closed* and *Complete*.
+Click a row to open it in Lark; right-click to copy.
 
 ## Notion
 
