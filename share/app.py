@@ -42,6 +42,7 @@ sys.path.insert(0, SHARE)
 import iconkit as K  # noqa: E402
 import prayer as PR  # noqa: E402
 import accounts as ACC  # noqa: E402
+import timelog as TL  # noqa: E402
 FONT = "Ubuntu Sans"
 
 # KILN_DEMO=<file.json> shows made-up projects, servers and programs instead of this computer's (for
@@ -4740,6 +4741,17 @@ class WorkBar(Gtk.DrawingArea):
         if kind == "pr":
             run(["xdg-open", it["url"]])
             return True
+        if kind == "active":
+            act = it
+            items = [("Open in Lark", lambda: open_url(act["url"])) if act.get("url") else ("Open in Lark", lambda: None),
+                     ("Show its terminal", lambda: self.terminal.new_tab(act["repo"]) if act.get("repo") else None),
+                     (None, None),
+                     ("Start a focus session", lambda: FOCUS_REF[0] and not FOCUS_REF[0].running and FOCUS_REF[0].toggle()),
+                     ("Stop the timer", lambda: (TL.stop(task_id=act["id"]), self.queue_draw())),
+                     ("Mark as completed", lambda: (move_task(dict(id=act["id"], title=act["title"], status="Ongoing",
+                                                                   url=act.get("url", "")), "done"), self.queue_draw()))]
+            popup_menu(ev, items)
+            return True
         if kind == "test":
             path = it["path"]
             if ev.button == 1:
@@ -4938,6 +4950,24 @@ class WorkBar(Gtk.DrawingArea):
             self._dot(cr, x + 14, col, filled=stt is not None)
             text(cr, word, x + 26, 30, 12.5, C["text"] if stt else C["dim"])
             x += w + 8
+        # the task being worked on, and for how long
+        act = TL.active()
+        if act:
+            el = TL.fmt(TL.elapsed(act))
+            tw = min(220, self._measure(cr, act["title"], 12.5))
+            w = 30 + tw + 8 + self._measure(cr, el, 12) + 14
+            if x + w + 8 < limit - 120:
+                self._box(cr, x, w, ("active", act))
+                cr.new_path()
+                cr.move_to(x + 11, 19)
+                cr.line_to(x + 11, 31)
+                cr.line_to(x + 21, 25)
+                cr.close_path()
+                set_rgba(cr, C["amber"], 1)
+                cr.fill()
+                text(cr, act["title"], x + 30, 30, 12.5, C["text"], maxw=220)
+                text(cr, el, x + 30 + tw + 8, 30, 12, C["amber"], bold=True)
+                x += w + 8
         # last commit (takes what is left)
         if p.get("commit"):
             when = since(p["commit_t"])
@@ -5657,6 +5687,8 @@ def move_task(t, kind):
     """Change a task's status in Lark Base (in the background; the board shows it at once)."""
     name = STATUS_NAMES[kind]
     PENDING[t["id"]] = (name, time.time())
+    if kind in ("done", "todo"):                         # finished (or put back): its timer ends
+        TL.stop(task_id=t["id"])
 
     def work():
         try:
@@ -5672,6 +5704,7 @@ def move_task(t, kind):
 
 
 TERM_REF = [None]                         # the desktop terminal (set in main), for "Start working"
+FOCUS_REF = [None]                        # the Pomodoro card (set in main), for "Start a focus session"
 
 
 def is_git_repo(path):
@@ -5722,6 +5755,7 @@ def start_task(t, ev=None, repo=None, moved=False):
     once and remembers (it never guesses, and never uses a folder that is not a git repository)."""
     if status_kind(t.get("status")) == "todo" and not moved:
         move_task(t, "doing")
+    TL.start(t)                                          # the clock starts (nothing happens if it already runs)
     cfg = ACC.details("larkbase")
     repo = repo or ACC.LarkBase.repo_for(cfg, t)
     if repo and not is_git_repo(repo):
@@ -5733,6 +5767,7 @@ def start_task(t, ev=None, repo=None, moved=False):
     if not term:
         return
     branch = ACC.LarkBase.branch_name(t["title"], t["id"], cfg.get("branch_prefix") or "task/")
+    TL.set_repo(t["id"], repo, branch)                   # the clock now knows which project it is running in
     q = shlex.quote(branch)
     term.new_tab(repo)
     GLib.timeout_add(700, lambda: (term.run_command(f"git switch {q} 2>/dev/null || git switch -c {q}"), False)[1])
@@ -5827,8 +5862,13 @@ class BoardBase(DockCard):
     def __init__(self, terminal=None):
         super().__init__(terminal)
         self.tab = None
+        self.running, self.times = None, {}
         self.add_events(Gdk.EventMask.SCROLL_MASK)
         self.connect("scroll-event", self._scroll)
+
+    def clock(self):
+        """The running task and the time spent per task, read once for a whole draw."""
+        self.running, self.times = TL.active(), TL.totals()
 
     def _scroll(self, _w, ev):
         step = 1 if ev.direction == Gdk.ScrollDirection.DOWN else -1 if ev.direction == Gdk.ScrollDirection.UP else 0
@@ -5921,6 +5961,7 @@ class BoardCard(BoardBase):
             return
         c, tasks = board_state()
         names = board_tabs(c, tasks)
+        self.clock()
         if not names:
             text(cr, c.get("error") or "Loading tasks…", 24, 90, 13, C["dim"], maxw=w - 48)
             return
@@ -5973,6 +6014,11 @@ class BoardCard(BoardBase):
             self.region(("adv", i), 12, y, 30, self.ROW_H - 2)
             self.dot(cr, 28, cy, self.kind, hot=self.hover == ("adv", i))
             right = self.chips(cr, 0, cy + 4, t, w - 22, others=self.tab.lower() not in ("mine", "me"), me=me)
+            if self.running and self.running["id"] == t["id"]:
+                right -= pill(cr, right, cy + 4, "▶ " + TL.fmt(TL.elapsed(self.running)), 10, C["amber"], align="r",
+                              bold=True) + 6
+            elif self.times.get(t["id"]):
+                right -= pill(cr, right, cy + 4, TL.fmt(self.times[t["id"]]), 10, C["blue"], align="r") + 6
             text(cr, t["title"] or "(untitled)", 46, cy + 5, 13.5, C["dim"] if self.kind == "done" else C["text"],
                  maxw=right - 46 - 6, strike=self.kind == "done")
             y += self.ROW_H
@@ -6100,6 +6146,7 @@ class BoardView(BoardBase):
             return
         c, tasks = board_state()
         names = board_tabs(c, tasks)
+        self.clock()
         if not names:
             text(cr, c.get("error") or "Loading tasks…", 24, 90, 13, C["dim"], maxw=w - 48)
             return
@@ -6224,12 +6271,19 @@ class BoardView(BoardBase):
                 self.region(("start",) + ident, x + w - 64, y + 6, 28, 28)
                 hot = self.hover == ("start",) + ident
                 cr.new_path()
-                cr.move_to(x + w - 56, y + 14)
-                cr.line_to(x + w - 56, y + 26)
-                cr.line_to(x + w - 46, y + 20)
-                cr.close_path()
-                set_rgba(cr, C["text"] if hot else C["dim"], 0.95 if hot else 0.55)
-                cr.fill()
+                if self.running and self.running["id"] == t["id"]:     # the running task: a stop square and its clock
+                    cr.rectangle(x + w - 56, y + 14, 11, 11)
+                    set_rgba(cr, C["amber"], 1)
+                    cr.fill()
+                    text(cr, "● " + TL.fmt(TL.elapsed(self.running)), x + w - 72, y + 24, 11, C["amber"], bold=True,
+                         align="r")
+                else:
+                    cr.move_to(x + w - 56, y + 14)
+                    cr.line_to(x + w - 56, y + 26)
+                    cr.line_to(x + w - 46, y + 20)
+                    cr.close_path()
+                    set_rgba(cr, C["text"] if hot else C["dim"], 0.95 if hot else 0.55)
+                    cr.fill()
         self.dot(cr, x + w - 20, y + 20, kind, hot=self.hover == ("adv",) + ident)
         text_wrap(cr, t["title"] or "(untitled)", x + 16, y + 26, w - 92, 13.5, C["dim"] if kind == "done" else C["text"],
                   lines=2, strike=kind == "done")
@@ -6240,7 +6294,10 @@ class BoardView(BoardBase):
         if who:
             px += text(cr, who, px, yy, 11, C["dim"], maxw=max(40, right - px - 10)) + 10
         if t.get("detail") and px < right - 60:
-            text(cr, "· " + t["detail"].split(",")[0], px, yy, 11, C["dim"], maxw=max(30, right - px - 8))
+            px += text(cr, "· " + t["detail"].split(",")[0], px, yy, 11, C["dim"], maxw=max(30, right - px - 8)) + 10
+        spent = self.times.get(t["id"])
+        if spent and px < right - 50:                                        # time already spent on it
+            text(cr, "⏱ " + TL.fmt(spent), px, yy, 11, C["blue"], maxw=max(30, right - px - 8))
 
     def activate(self, key, ev):
         c, tasks = board_state()
@@ -6261,7 +6318,10 @@ class BoardView(BoardBase):
             if j < len(items):
                 t = items[j]
                 if key[0] == "start" and ev.button == 1:
-                    start_task(t, ev)
+                    if self.running and self.running["id"] == t["id"]:
+                        TL.stop(task_id=t["id"])                              # the square stops the clock
+                    else:
+                        start_task(t, ev)
                 elif key[0] == "adv" and ev.button == 1:
                     move_task(t, {"todo": "doing", "doing": "done", "done": "doing"}[kind])
                 elif ev.button == 3:
@@ -6797,6 +6857,7 @@ def main():
     term = TerminalCard()
     cards = Cards(term)
     focus = FocusCard()
+    FOCUS_REF[0] = focus
 
     w1 = make_window("Kiln Cards", cards, g.x + L["cards"][0], g.y + L["cards"][1], CARDS_W, CARDS_H)
     # terminal window paints its own rounded card behind the (transparent) VTE
@@ -7050,6 +7111,7 @@ def main():
         cards.metrics.sample()
         cards.push_history()
         cards.poll_jobs()
+        TL.sync_with_board((accounts_data().get("larkbase") or {}).get("tasks"))     # done elsewhere: stop the clock
         for p in list(_procs):
             if p.poll() is not None:
                 _procs.remove(p)

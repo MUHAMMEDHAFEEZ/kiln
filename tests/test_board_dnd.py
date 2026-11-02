@@ -52,7 +52,12 @@ class BoardDragTests(unittest.TestCase):
         A.CONF, A.CACHE = conf, cache
         A.ACCOUNTS_FILE, A.CACHE_FILE = f"{conf}/accounts.json", f"{cache}/accounts.json"
         A._seen.clear()
+        TL = app.TL                                           # the clock must never touch the real timer files
+        cls.saved_tl = {n: getattr(TL, n) for n in ("CONF", "CACHE", "ACTIVE_FILE", "LOG_FILE")}
+        TL.CONF, TL.CACHE = conf, cache
+        TL.ACTIVE_FILE, TL.LOG_FILE = f"{cache}/active-task.json", f"{conf}/time-log.json"
         cls.moves, cls.opened = [], []
+        cls.real_move = staticmethod(app.move_task)
         app.move_task = lambda t, k: cls.moves.append((t["title"], k))
         app.open_url = lambda u: cls.opened.append(u)
         cls.view = app.BoardView(None)
@@ -72,6 +77,8 @@ class BoardDragTests(unittest.TestCase):
         cls.win.destroy()
         for n, v in cls.saved.items():
             setattr(cls.app.ACC, n, v)
+        for n, v in cls.saved_tl.items():
+            setattr(cls.app.TL, n, v)
         cls.app.ACC._seen.clear()
         cls.tmp.cleanup()
         for k in ("KILN_CONFIG", "KILN_CACHE"):
@@ -80,6 +87,8 @@ class BoardDragTests(unittest.TestCase):
     def setUp(self):
         self.moves.clear()
         self.opened.clear()
+        self.app.move_task = lambda t, k: self.moves.append((t["title"], k))
+        self.app.TL.stop()
         self.view.press = self.view.drag = None
 
     def btn(self, kind, x, y, button=1):
@@ -201,6 +210,34 @@ class BoardDragTests(unittest.TestCase):
         app.start_task(dict(tasks()[0], id="rec8", title="Another one"))
         self.assertEqual(len(app.todo_items(app.ptodo_file(repo))), 3)
 
+    def test_start_begins_the_clock_and_finishing_the_task_ends_it(self):
+        app = self.app
+        repo = self.git_repo("clockrepo")
+        self.set_accounts(repos=f"SHOP = {repo}")
+        term = self.FakeTerm()
+        app.TERM_REF[0] = term
+        app.request_mode = lambda m: None
+        t = tasks()[0]
+        app.start_task(t)
+        self.pump(lambda: term.cmds)
+        act = app.TL.active()
+        self.assertEqual((act["id"], act["repo"], act["branch"]), ("rec1", repo, "task/plan-the-launch"))
+        app.start_task(tasks()[1])                                      # another task: the first clock ends
+        self.assertEqual(app.TL.active()["id"], "rec2")
+        app.TL.start(t, repo=repo)
+        svc, real_sync = app.ACC.SERVICES["larkbase"], app.ACC.sync
+        writes = []
+        svc.set_status = lambda cfg, rid, status: writes.append((rid, status))      # nothing goes to Lark
+        app.ACC.sync = lambda *a, **k: None
+        try:
+            type(self).real_move(dict(t, status="Ongoing"), "done")       # the real move_task: it stops the clock
+            self.pump(lambda: writes)
+        finally:
+            del svc.set_status                                            # back to the class method
+            app.ACC.sync = real_sync
+        self.assertEqual(writes, [("rec1", "Completed")])
+        self.assertIsNone(app.TL.active())
+
     def test_every_department_of_the_task_is_tried(self):
         app = self.app
         flutter = self.git_repo("flutter")
@@ -247,8 +284,9 @@ class BoardDragTests(unittest.TestCase):
         app.request_mode = lambda m: None
         t = dict(tasks()[0], project="SHOP", detail="UI/UX")
         app.ACC.remember_repo(t, picked)
-        saved = app.ACC.load_accounts()["larkbase"]["repos"]
-        self.assertEqual(saved, f"shop/ui/ux = {picked}")
+        saved = app.ACC.load_accounts()["larkbase"]
+        self.assertEqual(saved["repos_map"], {"shop/ui/ux": picked})
+        self.assertNotIn("repos", saved)                                  # the typed lines are never touched
         app.start_task(t)                                                # now it goes straight there
         self.pump(lambda: term.cmds)
         self.assertEqual(term.tabs, [picked])

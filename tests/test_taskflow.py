@@ -13,6 +13,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "share"))
 import accounts as A  # noqa: E402
 import standup as S  # noqa: E402
+import timelog as TL  # noqa: E402
 
 NOW = datetime.datetime(2026, 11, 4, 10, 0).timestamp()          # a Wednesday morning
 DAY = 86400
@@ -104,6 +105,27 @@ class TrackTests(unittest.TestCase):
 
 
 class StandupTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = (TL.CONF, TL.CACHE, TL.ACTIVE_FILE, TL.LOG_FILE)
+        TL.CONF, TL.CACHE = f"{self.tmp.name}/conf", f"{self.tmp.name}/cache"
+        TL.ACTIVE_FILE, TL.LOG_FILE = f"{TL.CACHE}/active-task.json", f"{TL.CONF}/time-log.json"
+
+    def tearDown(self):
+        TL.CONF, TL.CACHE, TL.ACTIVE_FILE, TL.LOG_FILE = self.saved
+        self.tmp.cleanup()
+
+    def test_time_spent_shows_next_to_the_tasks_and_in_a_total(self):
+        TL.start(dict(id="rec1", title="Fix login", url=""), now=NOW - 2 * 3600)      # "Fix login" is Ongoing in entry()
+        TL.stop(now=NOW - 3600)
+        TL.start(dict(id="d1", title="Ship the API", url=""), now=NOW - 5 * 3600)       # finished work, 1h 30m
+        TL.stop(now=NOW - 3.5 * 3600)
+        text = S.build(self.entry(), NOW)
+        self.assertIn("• Ship the API (SHOP) · 1h 30m", text)
+        self.assertIn("• Fix login (SHOP · Backend) · 1h 00m — waiting for review", text)
+        self.assertIn("Time tracked today: 2h 30m", text)
+        self.assertNotIn("Time tracked", S.build(self.entry(changes=[], tasks=[]), NOW + 40 * 24 * 3600))
+
     def entry(self, **kw):
         tasks = [task(1, "Fix login", "Ongoing", priority="Important", note="waiting for review\nmore"),
                  task(2, "Write docs"), task(3, "Late thing", priority="Important", due=NOW - 5 * DAY),
@@ -169,6 +191,47 @@ class StartWorkingTests(unittest.TestCase):
             self.assertEqual(f(dict(repos=f"SHOP/Flutter = {app}"), dict(project="SHOP", detail="UI/UX, Flutter")), app)
             self.assertEqual(f(dict(repos=f"BLOG = {other}"), dict(project="SHOP, BLOG", detail="Backend")), other)
             self.assertEqual(f(dict(repos=f"Flutter = {app}"), dict(project="DOCS", detail="UI/UX, Flutter")), app)
+
+
+class RememberTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = (A.CONF, A.ACCOUNTS_FILE)
+        A.CONF, A.ACCOUNTS_FILE = f"{self.tmp.name}/conf", f"{self.tmp.name}/conf/accounts.json"
+        A.save_accounts({"larkbase": {"link": "x", "repos": "SHOP = /typed/by/you"}})
+        self.dir = f"{self.tmp.name}/proj"
+        os.makedirs(self.dir)
+
+    def tearDown(self):
+        A.CONF, A.ACCOUNTS_FILE = self.saved
+        self.tmp.cleanup()
+
+    def test_names_from_the_board_cannot_add_lines_or_rules(self):
+        nasty = dict(project="SHOP\nBLOG = /evil\n[x]", detail="a = b\r\nSHOP = /evil")
+        self.assertTrue(A.remember_repo(nasty, self.dir))
+        cfg = A.load_accounts()["larkbase"]
+        self.assertEqual(cfg["repos"], "SHOP = /typed/by/you")                  # untouched
+        (key, path), = cfg["repos_map"].items()
+        self.assertEqual(path, self.dir)
+        self.assertFalse(any(c in key for c in "\n\r=") or len(key) > 61, repr(key))
+        rules = A.LarkBase.rules(cfg)
+        self.assertEqual(rules["shop"], "/typed/by/you")                        # nothing the task said replaced it
+        self.assertNotIn("/evil", " ".join(rules.values()))
+
+    def test_a_typed_line_beats_a_remembered_choice(self):
+        t = dict(project="SHOP", detail="Backend")
+        A.remember_repo(t, self.dir)
+        self.assertEqual(A.LarkBase.rules(A.load_accounts()["larkbase"])["shop/backend"], self.dir)
+        cfg = dict(A.load_accounts()["larkbase"], repos=f"SHOP/Backend = {self.tmp.name}")
+        self.assertEqual(A.LarkBase.rules(cfg)["shop/backend"], self.tmp.name)
+
+    def test_only_real_clean_folders_are_remembered(self):
+        t = dict(project="SHOP", detail="Backend")
+        self.assertFalse(A.remember_repo(t, f"{self.tmp.name}/missing"))
+        weird = f"{self.tmp.name}/we\nird"
+        os.makedirs(weird)
+        self.assertFalse(A.remember_repo(t, weird))
+        self.assertNotIn("repos_map", A.load_accounts()["larkbase"])
 
 
 if __name__ == "__main__":

@@ -724,6 +724,9 @@ class LarkBase(Service):
             name, sep, path = line.partition("=")
             if sep and name.strip() and path.strip():
                 out[name.strip().lower()] = os.path.expanduser(path.strip())
+        for name, path in (cfg.get("repos_map") or {}).items():          # what Kiln remembered from your choices
+            if isinstance(name, str) and isinstance(path, str):
+                out.setdefault(name.lower(), os.path.expanduser(path))   # a line you typed always wins
         return out
 
     @staticmethod
@@ -746,7 +749,8 @@ class LarkBase(Service):
     def rule_key(task):
         """The line a remembered choice is saved under: project/department of the task's first project and department."""
         projects, depts = LarkBase.parts(task)
-        return "/".join(x for x in ((projects or [""])[0], (depts or [""])[0]) if x) or "default"
+        key = "/".join(x for x in ((projects or [""])[0], (depts or [""])[0]) if x) or "default"
+        return clean_text(key, 60).lower().replace("=", "-")        # names come from a board others can edit
 
     def track(self, old, entry, now=None):
         """After a sync: remember what changed (for the standup) and tell you about it."""
@@ -1294,17 +1298,16 @@ def status_changes(old_tasks, new_tasks, now):
 
 
 def remember_repo(task, path):
-    """Save 'project/department = folder' in the Lark Base account, so the next Start for such a task goes straight there."""
+    """Remember 'project/department -> folder' in the Lark Base account (a separate map, not the typed lines), so the
+    next Start for such a task goes straight there. The names come from the board, so they are cleaned first."""
     data = load_accounts()
     cfg = data.get("larkbase")
-    if not cfg:
-        return
-    key = LarkBase.rule_key(task)
-    lines = [l for l in (cfg.get("repos") or "").splitlines()
-             if l.partition("=")[0].strip().lower() != key and l.strip()]
-    lines.append(f"{key} = {path}")
-    cfg["repos"] = "\n".join(lines)
+    path = str(path or "")
+    if not cfg or not os.path.isdir(path) or clean_text(path, 4096) != path:
+        return False
+    cfg.setdefault("repos_map", {})[LarkBase.rule_key(task)] = path
     save_accounts(data)
+    return True
 
 
 def missing(service, values):

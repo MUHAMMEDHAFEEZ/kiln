@@ -6,6 +6,9 @@
   working on also shows in Today. See `docs/ACCOUNTS.md`.
 * The board shows a status bar and filter in red (not started), yellow (ongoing) and green (completed). You can add a task
   (`+ New task`, `kiln newtask`), move a task between statuses (click its dot, or right-click) and complete it from Today.
+* **Time on tasks:** Start also starts a clock (shown in the work bar and on the card); finishing the task or starting
+  another ends it. `kiln time` reports per project and task; the standup shows it. Start now tries every department of a task,
+  never guesses a folder (it must be a git repository) and, when none matches, asks once and remembers the answer.
 * **Start working** on a task (▶ on the card): moves it to Ongoing, opens a terminal in the project's folder on a branch named
   after the task and adds it to the project's todo list. **Standup** note (`kiln standup`, a button on the board) from what
   you finished, what is ongoing and what is next. **Notifications** for tasks assigned to you and deadlines today or tomorrow.

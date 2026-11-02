@@ -15,6 +15,7 @@ import time
 SHARE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SHARE)
 import accounts as A  # noqa: E402
+import timelog as TL  # noqa: E402
 
 KIND = A.LarkBase.kind
 
@@ -23,9 +24,9 @@ def first(s):
     return (s or "").split(",")[0].strip()
 
 
-def line(t, note=False):
+def line(t, note=False, spent=None):
     tag = " · ".join(x for x in (first(t.get("project")), first(t.get("detail"))) if x)
-    out = "• " + t["title"].strip() + (f" ({tag})" if tag else "")
+    out = "• " + t["title"].strip() + (f" ({tag})" if tag else "") + (f" · {TL.fmt(spent)}" if spent else "")
     text = ((t.get("note") or "").strip().splitlines() or [""])[0]
     if note and text:
         out += " — " + (text[:100] + "…" if len(text) > 100 else text)
@@ -44,23 +45,28 @@ def build(entry, now=None):
     today = datetime.date.fromtimestamp(now)
     back = 3 if today.weekday() == 0 else 1                      # on Monday "yesterday" is Friday
     since = datetime.datetime.combine(today - datetime.timedelta(days=back), datetime.time()).timestamp()
+    worked = TL.on_day(today, now)                                 # seconds per task today (running one included)
+    total = TL.totals(now)
     seen, done = set(), []
     for c in reversed(entry.get("changes") or []):
         if c.get("kind") == "status" and KIND(c.get("to")) == "done" and c.get("at", 0) >= since and me in c.get("owners", []) \
                 and c["id"] not in seen:
             seen.add(c["id"])
-            done.append(dict(title=c["title"], project=c.get("project", "")))
+            done.append(dict(title=c["title"], project=c.get("project", ""), id=c["id"]))
     doing = sorted((t for t in tasks if KIND(t.get("status")) == "doing"), key=rank)
     nxt = sorted((t for t in tasks if KIND(t.get("status")) == "todo"), key=rank)[:3]
     late = [t for t in sorted(tasks, key=rank) if KIND(t.get("status")) != "done" and t.get("due") and t["due"] < now
             and (t.get("priority") or "").lower() == "important"][:3]
     out = [f"Standup · {today.strftime('%a %-d %b')}", "", "Done" + (" since Friday" if back == 3 else " since yesterday")]
-    out += [line(t) for t in done] or ["• nothing recorded yet (Kiln notes tasks that turn Completed while it runs)"]
-    out += ["", "Today"] + ([line(t, note=True) for t in doing] or ["• nothing marked Ongoing"])
+    out += [line(t, spent=total.get(t.get("id"))) for t in done] or \
+        ["• nothing recorded yet (Kiln notes tasks that turn Completed while it runs)"]
+    out += ["", "Today"] + ([line(t, note=True, spent=worked.get(t["id"])) for t in doing] or ["• nothing marked Ongoing"])
     if nxt:
         out += ["", "Next"] + [line(t) for t in nxt]
     if late:
         out += ["", "Needs attention (important, past its date)"] + [line(t) for t in late]
+    if worked:
+        out += ["", f"Time tracked today: {TL.fmt(sum(worked.values()))}"]
     return "\n".join(out) + "\n"
 
 
