@@ -5674,20 +5674,63 @@ def move_task(t, kind):
 TERM_REF = [None]                         # the desktop terminal (set in main), for "Start working"
 
 
-def start_task(t):
-    """Move the task to Ongoing, open a terminal in its project's folder on a branch named after it, and show the
-    terminal. The folder comes from "Project folders" in the Lark Base account, else the project in the work bar."""
-    kind = status_kind(t.get("status"))
-    if kind == "todo":
+def is_git_repo(path):
+    return bool(path) and os.path.isdir(path) and bool(_git(path, "rev-parse", "--show-toplevel", timeout=3))
+
+
+def choose_repo(ev, t, then):
+    """No folder is known for this task: ask where it lives (projects named like its project first), remember
+    the answer, and carry on with `then(path)`."""
+    projects, _depts = ACC.LarkBase.parts(t)
+    rows = [r for r in load_projects() if is_git_repo(r["path"])]
+    first = [r for r in rows if any(p and p in r["name"].lower() for p in projects)]
+    cur = WORK.get("proj")
+    rest = [r for r in rows if r not in first and (not cur or r["path"] != cur["path"])][:6]
+    seen, items = set(), []
+
+    def add(label, path):
+        if path not in seen:
+            seen.add(path)
+            items.append((label, lambda p=path: (ACC.remember_repo(t, p), then(p))))
+    for r in first:
+        add(r["name"], r["path"])
+    if cur and is_git_repo(cur["path"]):
+        add(f"{cur['name']}  (the project in the work bar)", cur["path"])
+    if rest:
+        items.append((None, None))
+        for r in rest:
+            add(r["name"], r["path"])
+
+    def pick():
+        dlg = Gtk.FileChooserNative(title="The folder of this project", action=Gtk.FileChooserAction.SELECT_FOLDER)
+        if dlg.run() == Gtk.ResponseType.ACCEPT and dlg.get_filename() and is_git_repo(dlg.get_filename()):
+            ACC.remember_repo(t, dlg.get_filename())
+            then(dlg.get_filename())
+        else:
+            BOARD_NOTE.update(text="That folder is not a git repository.", until=time.time() + 15)
+    items += [(None, None), ("Choose a folder…", pick)]
+    if ev is None:
+        BOARD_NOTE.update(text="Pick this project's folder: Settings → Accounts → Lark Base → Project folders.",
+                          until=time.time() + 20)
+        return
+    popup_menu(ev, items)
+
+
+def start_task(t, ev=None, repo=None, moved=False):
+    """Move the task to Ongoing, open a terminal tab in its project's folder on a branch named after it, and show
+    the terminal. The folder comes from "Project folders" in the Lark Base account; when there is none Kiln asks
+    once and remembers (it never guesses, and never uses a folder that is not a git repository)."""
+    if status_kind(t.get("status")) == "todo" and not moved:
         move_task(t, "doing")
     cfg = ACC.details("larkbase")
-    repo = ACC.LarkBase.repo_for(cfg, t)
-    if not repo and WORK.get("proj") and os.path.isdir(WORK["proj"]["path"]):
-        repo = WORK["proj"]["path"]
+    repo = repo or ACC.LarkBase.repo_for(cfg, t)
+    if repo and not is_git_repo(repo):
+        repo = None
     term = TERM_REF[0]
-    if not repo or not term:
-        BOARD_NOTE.update(text="Moved to Ongoing. Add this project's folder in Settings → Accounts → Lark Base "
-                               "(Project folders) to open a terminal on a branch.", until=time.time() + 20)
+    if not repo:
+        choose_repo(ev, t, lambda path: start_task(t, repo=path, moved=True))
+        return
+    if not term:
         return
     branch = ACC.LarkBase.branch_name(t["title"], t["id"], cfg.get("branch_prefix") or "task/")
     q = shlex.quote(branch)
@@ -5709,7 +5752,7 @@ def board_menu(ev, t, redraw):
     kind = status_kind(t.get("status"))
     items = [("Open in Lark", lambda: open_url(t["url"])), (None, None)]
     if kind != "done":
-        items += [("Start working on this", lambda: (start_task(t), redraw())), (None, None)]
+        items += [("Start working on this", lambda: (start_task(t, ev), redraw())), (None, None)]
     items += [(f"Move to {STATUS_TITLES[k]}", lambda k=k: (move_task(t, k), redraw())) for k in ("todo", "doing", "done")
               if k != kind]
     items += [(None, None), ("Copy title", lambda: copy_text(t["title"])), ("Copy link", lambda: copy_text(t["url"]))]
@@ -6218,7 +6261,7 @@ class BoardView(BoardBase):
             if j < len(items):
                 t = items[j]
                 if key[0] == "start" and ev.button == 1:
-                    start_task(t)
+                    start_task(t, ev)
                 elif key[0] == "adv" and ev.button == 1:
                     move_task(t, {"todo": "doing", "doing": "done", "done": "doing"}[kind])
                 elif ev.button == 3:

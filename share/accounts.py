@@ -717,20 +717,36 @@ class LarkBase(Service):
         return prefix + slug
 
     @staticmethod
-    def repo_for(cfg, task):
-        """The folder to work in for a task, from the 'Project folders' lines (SHOP/Backend = ~/code/shop-api,
-        SHOP = ~/code/shop, Backend = ~/code/api); the most specific line wins. None when nothing matches."""
-        rules = {}
+    def rules(cfg):
+        """{'shop/backend': '/path', 'shop': '/path', ...} from the 'Project folders' lines."""
+        out = {}
         for line in (cfg.get("repos") or "").splitlines():
             name, sep, path = line.partition("=")
             if sep and name.strip() and path.strip():
-                rules[name.strip().lower()] = os.path.expanduser(path.strip())
-        proj = (task.get("project") or "").split(",")[0].strip().lower()
-        dept = (task.get("detail") or "").split(",")[0].strip().lower()
-        for key in (f"{proj}/{dept}", proj, dept):
-            if key and key != "/" and rules.get(key) and os.path.isdir(rules[key]):
-                return rules[key]
-        return None
+                out[name.strip().lower()] = os.path.expanduser(path.strip())
+        return out
+
+    @staticmethod
+    def parts(task):
+        """(projects, departments) of a task, lower case: a task can belong to several of each."""
+        split = lambda v: [x.strip().lower() for x in (v or "").split(",") if x.strip()]  # noqa: E731
+        return split(task.get("project")), split(task.get("detail"))
+
+    @staticmethod
+    def repo_for(cfg, task):
+        """The folder to work in for a task, from the 'Project folders' lines (SHOP/Backend = ~/code/shop-api,
+        SHOP = ~/code/shop, Backend = ~/code/api). Every project and department of the task is tried, the most
+        specific line first: project/department, then project, then department. None when nothing matches."""
+        rules = LarkBase.rules(cfg)
+        projects, depts = LarkBase.parts(task)
+        keys = [f"{p}/{d}" for p in projects for d in depts] + projects + depts
+        return next((rules[k] for k in keys if rules.get(k) and os.path.isdir(rules[k])), None)
+
+    @staticmethod
+    def rule_key(task):
+        """The line a remembered choice is saved under: project/department of the task's first project and department."""
+        projects, depts = LarkBase.parts(task)
+        return "/".join(x for x in ((projects or [""])[0], (depts or [""])[0]) if x) or "default"
 
     def track(self, old, entry, now=None):
         """After a sync: remember what changed (for the standup) and tell you about it."""
@@ -1275,6 +1291,20 @@ def status_changes(old_tasks, new_tasks, now):
         if added:
             out.append(dict(base_, kind="owners", frm=None, to=t.get("status", ""), added=added))
     return out
+
+
+def remember_repo(task, path):
+    """Save 'project/department = folder' in the Lark Base account, so the next Start for such a task goes straight there."""
+    data = load_accounts()
+    cfg = data.get("larkbase")
+    if not cfg:
+        return
+    key = LarkBase.rule_key(task)
+    lines = [l for l in (cfg.get("repos") or "").splitlines()
+             if l.partition("=")[0].strip().lower() != key and l.strip()]
+    lines.append(f"{key} = {path}")
+    cfg["repos"] = "\n".join(lines)
+    save_accounts(data)
 
 
 def missing(service, values):

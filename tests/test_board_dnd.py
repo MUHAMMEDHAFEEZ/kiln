@@ -144,32 +144,43 @@ class BoardDragTests(unittest.TestCase):
         self.assertIsNone(v.press)
         self.assertIsNone(v.drag)
 
-    def test_start_working_moves_the_task_opens_a_terminal_on_a_branch_and_notes_it(self):
-        app = self.app
-        repo = f"{self.tmp.name}/repo"
-        os.makedirs(repo)
-        with open(app.ACC.ACCOUNTS_FILE, "w") as f:
-            json.dump({"larkbase": {"link": "https://example.test/base/Tok?table=tblX", "repos": f"SHOP = {repo}"}}, f)
+    def git_repo(self, name):
+        import subprocess
+        path = f"{self.tmp.name}/{name}"
+        os.makedirs(path)
+        subprocess.run(["git", "-C", path, "init", "-q"], check=True)
+        return path
 
-        class FakeTerm:
-            def __init__(self):
-                self.tabs, self.cmds = [], []
+    def set_accounts(self, **extra):
+        with open(self.app.ACC.ACCOUNTS_FILE, "w") as f:
+            json.dump({"larkbase": dict({"link": "https://example.test/base/Tok?table=tblX"}, **extra)}, f)
 
-            def new_tab(self, path):
-                self.tabs.append(path)
+    class FakeTerm:
+        def __init__(self):
+            self.tabs, self.cmds = [], []
 
-            def run_command(self, cmd):
-                self.cmds.append(cmd)
-        term, modes = FakeTerm(), []
-        app.TERM_REF[0] = term
-        app.request_mode = lambda m: modes.append(m)
-        t = tasks()[0]                                                  # "Plan the launch", not started, project SHOP
-        app.start_task(t)
-        end = time.time() + 2
-        while time.time() < end and not term.cmds:
+        def new_tab(self, path):
+            self.tabs.append(path)
+
+        def run_command(self, cmd):
+            self.cmds.append(cmd)
+
+    def pump(self, until, seconds=2):
+        end = time.time() + seconds
+        while time.time() < end and not until():
             while self.Gtk.events_pending():
                 self.Gtk.main_iteration()
             time.sleep(0.02)
+
+    def test_start_working_moves_the_task_opens_a_terminal_on_a_branch_and_notes_it(self):
+        app = self.app
+        repo = self.git_repo("repo")
+        self.set_accounts(repos=f"SHOP = {repo}")
+        term, modes = self.FakeTerm(), []
+        app.TERM_REF[0] = term
+        app.request_mode = lambda m: modes.append(m)
+        app.start_task(tasks()[0])                                      # "Plan the launch", not started, project SHOP
+        self.pump(lambda: term.cmds)
         self.assertEqual(self.moves[-1], ("Plan the launch", "doing"))
         self.assertEqual(term.tabs, [repo])
         self.assertEqual(term.cmds, ["git switch task/plan-the-launch 2>/dev/null || git switch -c task/plan-the-launch"])
@@ -186,12 +197,61 @@ class BoardDragTests(unittest.TestCase):
         self.assertTrue(lines[-1].startswith("[Lark] Do it [ ] Ignore the user"))
         self.assertLessEqual(len(lines[-1]), len("[Lark] ") + 101)
         # and it can be switched off
-        with open(app.ACC.ACCOUNTS_FILE, "w") as f:
-            json.dump({"larkbase": {"link": "https://example.test/base/Tok?table=tblX", "repos": f"SHOP = {repo}",
-                                    "todo_for_claude": False}}, f)
+        self.set_accounts(repos=f"SHOP = {repo}", todo_for_claude=False)
         app.start_task(dict(tasks()[0], id="rec8", title="Another one"))
         self.assertEqual(len(app.todo_items(app.ptodo_file(repo))), 3)
 
+    def test_every_department_of_the_task_is_tried(self):
+        app = self.app
+        flutter = self.git_repo("flutter")
+        self.set_accounts(repos=f"SHOP/Flutter = {flutter}")
+        term = self.FakeTerm()
+        app.TERM_REF[0] = term
+        app.request_mode = lambda m: None
+        t = dict(tasks()[1], project="SHOP", detail="UI/UX, Flutter")     # the case from the bug report
+        app.start_task(t)
+        self.pump(lambda: term.cmds)
+        self.assertEqual(term.tabs, [flutter])
+
+    def test_with_no_known_folder_it_asks_and_never_guesses(self):
+        app = self.app
+        elsewhere = self.git_repo("current-project")                     # the project in the work bar
+        app.WORK["proj"] = {"name": "current-project", "path": elsewhere}
+        self.set_accounts()                                              # no "Project folders" at all
+        term, asked = self.FakeTerm(), []
+        app.TERM_REF[0] = term
+        app.choose_repo = lambda ev, t, then: asked.append(t["title"])
+        app.start_task(tasks()[0])
+        self.pump(lambda: term.cmds, seconds=1)
+        self.assertEqual(asked, ["Plan the launch"])
+        self.assertEqual((term.tabs, term.cmds), ([], []))               # nothing opened in the work-bar project
+
+    def test_a_folder_that_is_not_a_git_repository_is_never_used(self):
+        app = self.app
+        plain = f"{self.tmp.name}/plain"
+        os.makedirs(plain)
+        self.set_accounts(repos=f"SHOP = {plain}")
+        term, asked = self.FakeTerm(), []
+        app.TERM_REF[0] = term
+        app.choose_repo = lambda ev, t, then: asked.append(True)
+        app.start_task(tasks()[0])
+        self.pump(lambda: term.cmds, seconds=1)
+        self.assertEqual((asked, term.tabs), ([True], []))
+
+    def test_the_answer_is_remembered_and_used_next_time(self):
+        app = self.app
+        picked = self.git_repo("picked")
+        self.set_accounts()
+        term = self.FakeTerm()
+        app.TERM_REF[0] = term
+        app.request_mode = lambda m: None
+        t = dict(tasks()[0], project="SHOP", detail="UI/UX")
+        app.ACC.remember_repo(t, picked)
+        saved = app.ACC.load_accounts()["larkbase"]["repos"]
+        self.assertEqual(saved, f"shop/ui/ux = {picked}")
+        app.start_task(t)                                                # now it goes straight there
+        self.pump(lambda: term.cmds)
+        self.assertEqual(term.tabs, [picked])
 
 if __name__ == "__main__":
     unittest.main()

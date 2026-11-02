@@ -164,6 +164,11 @@ class StartWorkingTests(unittest.TestCase):
             self.assertIsNone(f(cfg, dict(project="DOCS", detail="Flutter")))          # that folder does not exist
             self.assertIsNone(f({}, dict(project="SHOP", detail="Backend")))
             self.assertEqual(f({"repos": f"~/x = {api}\nshop = {app}"}, dict(project="SHOP, BLOG", detail="")), app)
+            # a task with several departments or projects: every one counts, the most specific line first
+            self.assertEqual(f(cfg, dict(project="SHOP", detail="UI/UX, Backend")), api)
+            self.assertEqual(f(dict(repos=f"SHOP/Flutter = {app}"), dict(project="SHOP", detail="UI/UX, Flutter")), app)
+            self.assertEqual(f(dict(repos=f"BLOG = {other}"), dict(project="SHOP, BLOG", detail="Backend")), other)
+            self.assertEqual(f(dict(repos=f"Flutter = {app}"), dict(project="DOCS", detail="UI/UX, Flutter")), app)
 
 
 if __name__ == "__main__":
