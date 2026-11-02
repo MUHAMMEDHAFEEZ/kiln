@@ -643,7 +643,7 @@ class LarkBase(Service):
                 raise ServiceError("Sign in to Lark again: lark-cli auth login")
             if e.get("subtype") == "not_found" or "not_found" in str(e.get("message", "")):
                 raise ServiceError("Lark could not find that table. Check the link and your access to it.")
-            raise ServiceError("Lark said: " + str(e.get("message", "error"))[:160])
+            raise ServiceError("Lark said: " + clean_text(e.get("message", "error"), 160))
         return d.get("data") or {}
 
     @staticmethod

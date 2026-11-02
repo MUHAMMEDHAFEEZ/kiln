@@ -21,13 +21,13 @@ KIND = A.LarkBase.kind
 
 
 def first(s):
-    return (s or "").split(",")[0].strip()
+    return A.clean_text((s or "").split(",")[0], 40)           # (everything printed here comes from a shared board)
 
 
 def line(t, note=False, spent=None):
     tag = " · ".join(x for x in (first(t.get("project")), first(t.get("detail"))) if x)
-    out = "• " + t["title"].strip() + (f" ({tag})" if tag else "") + (f" · {TL.fmt(spent)}" if spent else "")
-    text = ((t.get("note") or "").strip().splitlines() or [""])[0]
+    out = "• " + A.clean_text(t["title"], 120) + (f" ({tag})" if tag else "") + (f" · {TL.fmt(spent)}" if spent else "")
+    text = A.clean_text(((t.get("note") or "").strip().splitlines() or [""])[0], 120)
     if note and text:
         out += " — " + (text[:100] + "…" if len(text) > 100 else text)
     return out

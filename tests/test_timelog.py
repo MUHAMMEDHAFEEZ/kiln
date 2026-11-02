@@ -81,6 +81,23 @@ class TimelogTests(unittest.TestCase):
         self.assertEqual([T.fmt(x) for x in (5, 59, 60, 42 * 60, 3600, 3600 + 5 * 60, 26 * 3600)],
                          ["<1m", "<1m", "1m", "42m", "1h 00m", "1h 05m", "26h 00m"])
 
+    def test_text_from_the_board_cannot_drive_the_terminal(self):
+        evil = "Fix\x1b[2J\x1b]0;pwned\x07 login\r\nnext"
+        T.start(task(1, evil), repo="/code/ap\x1b[31mi", now=T0)
+        self.assertNotIn("\x1b", T.active()["title"])
+        T.stop(now=T0 + 90 * 60)
+        text = T.report("today", T0 + 5 * H)
+        for bad in ("\x1b", "\x07", "\r", "\x00"):
+            self.assertNotIn(bad, text)
+        self.assertIn("Fix", text)
+        # a log written by an older version, with raw text in it, is cleaned when it is printed
+        import json
+        with open(T.LOG_FILE, "w") as f:
+            json.dump({"sessions": [dict(id="old", title="\x1b[31mred\x07", repo="/c/\x1b[0mp", start=T0, end=T0 + H)]}, f)
+        text = T.report("today", T0 + 5 * H)
+        self.assertNotIn("\x1b", text)
+        self.assertNotIn("\x07", text)
+
     def test_the_report_names_tasks_and_projects(self):
         T.start(task(1, "Fix login"), repo="/code/api", now=T0)
         T.stop(now=T0 + 90 * 60)

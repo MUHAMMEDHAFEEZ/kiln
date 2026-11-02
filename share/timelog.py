@@ -13,6 +13,9 @@ import os
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import accounts as A  # noqa: E402  (clean_text: titles come from a board other people can edit)
+
 HOME = os.path.expanduser("~")
 CONF = os.environ.get("KILN_CONFIG", f"{HOME}/.config/kiln")
 CACHE = os.environ.get("KILN_CACHE", f"{HOME}/.cache/kiln")
@@ -57,7 +60,8 @@ def start(task, repo=None, branch=None, now=None):
         return active()
     if cur:
         stop(now)
-    act = dict(id=task["id"], title=task.get("title", ""), url=task.get("url", ""), repo=repo, branch=branch, started=now)
+    act = dict(id=task["id"], title=A.clean_text(task.get("title", "")), url=task.get("url", ""), repo=repo, branch=branch,
+               started=now)
     _write(ACTIVE_FILE, act)
     return act
 
@@ -146,7 +150,6 @@ def sync_with_board(tasks):
     cur = active()
     if not cur:
         return
-    import accounts as A
     for t in tasks or []:
         if t.get("id") == cur["id"] and A.LarkBase.kind(t.get("status")) != "doing":
             stop(task_id=cur["id"])
@@ -157,7 +160,7 @@ def report(period="today", now=None):
     now = now or time.time()
     today = datetime.date.fromtimestamp(now)
     days = [today] if period == "today" else [today - datetime.timedelta(days=i) for i in range(6, -1, -1)]
-    titles = {s["id"]: s.get("title", "") for s in sessions(now)}
+    titles = {s["id"]: A.clean_text(s.get("title", ""), 80) for s in sessions(now)}      # also what older logs hold
     per_task, per_repo, lines = {}, {}, []
     for d in days:
         day_tasks = on_day(d, now)
@@ -167,7 +170,7 @@ def report(period="today", now=None):
             lines.append(f"{d.strftime('%a %-d %b')}  {fmt(sum(day_tasks.values())) if day_tasks else '—'}")
     lo = datetime.datetime.combine(days[0], datetime.time()).timestamp()
     for repo, secs in by_repo(lo, now).items():
-        name = os.path.basename(repo.rstrip("/")) or "(no project)"
+        name = A.clean_text(os.path.basename(repo.rstrip("/")), 60) or "(no project)"
         per_repo[name] = per_repo.get(name, 0) + secs
     out = [f"Time · {'today' if period == 'today' else 'last 7 days'}  ({fmt(sum(per_task.values())) if per_task else 'nothing yet'})"]
     if lines:
@@ -185,5 +188,4 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     sys.exit(main(sys.argv[1:]))

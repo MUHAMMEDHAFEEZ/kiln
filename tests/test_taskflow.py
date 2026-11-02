@@ -151,6 +151,15 @@ class StandupTests(unittest.TestCase):
         self.assertIn("Late thing", text.split("Needs attention")[1])
         self.assertTrue(done and today and nxt and attn)
 
+    def test_the_note_never_carries_control_characters_from_the_board(self):
+        tasks = [task(1, "Fix\x1b[2J login\x07", "Ongoing", note="\x1b]0;x\x07waiting", project="TL\x1bN", detail="Back\x1bend")]
+        text = S.build(dict(me="Ada", tasks=tasks, changes=[dict(id="d", title="Done\x1b[31m!", kind="status", to="Completed",
+                                                                at=NOW - 3600, owners=["Ada"], project="SHOP")]), NOW)
+        for bad in ("\x1b", "\x07", "\x00"):
+            self.assertNotIn(bad, text)
+        self.assertIn("Fix", text)
+        self.assertIn("waiting", text)
+
     def test_nothing_recorded_says_so(self):
         text = S.build(self.entry(changes=[], tasks=[]), NOW)
         self.assertIn("nothing recorded yet", text)
