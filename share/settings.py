@@ -39,7 +39,7 @@ DEFAULTS = {
     "prayer": {"enabled": False, "method": "mwl", "asr": "standard", "language": "en"},
     "now_playing": {"youtube_music_only": False},
     "lock_screen": {"widgets": True, "brightness": 0.72, "blur": 0},
-    "terminal": {"project_commands": True},
+    "terminal": {"project_commands": True, "system_input_method": False},
     "modes": {"focus_mutes_notifications": True, "focus_dim": True},
     "icons": {"recent_dot": True, "recent_hours": 48},
     "dock": {"cards": ["git", "board", "system", "day", "notes", "tests"], "position": "left"},
@@ -503,6 +503,10 @@ class Settings(Gtk.Window):
         box.pack_start(self.switch("terminal.project_commands", "Terminal buttons from the project",
                                    "The buttons under the terminal come from the project's own files "
                                    "(package.json scripts, Makefile, manage.py, Cargo, Go, Flutter...)."),
+                       False, False, 0)
+        box.pack_start(self.switch("terminal.system_input_method", "Terminal uses the system input method",
+                                   "Off is faster typing. Turn it on only if you type Chinese, Japanese, Korean or "
+                                   "another language that needs an input-method engine. Applies after a restart."),
                        False, False, 0)
         box.pack_start(self.switch("modes.focus_mutes_notifications", "Focus mode silences notifications",
                                    "Switch modes from the work bar, or with Super+J. Banners come back when you leave Focus."),

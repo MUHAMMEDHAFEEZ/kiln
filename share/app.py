@@ -62,7 +62,7 @@ DEFAULT_CONFIG = {
     "web_search": {"name": "DuckDuckGo", "url": "https://duckduckgo.com/?q={q}"},
     "integrations": {"github": True, "lark": False, "claude_code": True},
     "now_playing": {"youtube_music_only": False},
-    "terminal": {"project_commands": True},
+    "terminal": {"project_commands": True, "system_input_method": False},
     "modes": {"focus_mutes_notifications": True},
     "icons": {"recent_dot": True, "recent_hours": 48},
     "dock": {"cards": ["git", "board", "system", "day", "notes", "tests"], "position": "left"},
@@ -1881,8 +1881,9 @@ class TerminalCard(Gtk.Box):
         t.connect("contents-changed", self._echo)
         return t
 
-    # --- typing lag probe: a key press, the shell's echo, the frame that shows it. A slow one leaves a line in the log
-    _lag = {"key": 0.0, "echo": 0.0, "logged": 0.0}
+    # --- typing probe: a key press, the shell's answer, the frame that shows it. Summaries go to the log (kiln logs)
+    _lag = {"key": 0.0, "echo": 0.0}
+    _lag_samples = []                                     # (total ms, until the echo ms) since the last summary
 
     def _echo(self, _term):
         lag = self._lag
@@ -1893,11 +1894,8 @@ class TerminalCard(Gtk.Box):
     def _frame(self, _w, _clock):
         lag, now = self._lag, time.perf_counter()
         if lag["key"] and lag["echo"]:
-            total, echo = now - lag["key"], lag["echo"] - lag["key"]
-            if total > 0.15 and now - lag["logged"] > 5:
-                lag["logged"] = now
-                print(f"kiln: typing lag {total * 1000:.0f} ms (the shell answered after {echo * 1000:.0f} ms, "
-                      f"the frame was drawn {(total - echo) * 1000:.0f} ms later)", flush=True)
+            self._lag_samples.append(((now - lag["key"]) * 1000, (lag["echo"] - lag["key"]) * 1000))
+            del self._lag_samples[:-500]
         lag["key"] = lag["echo"] = 0.0
         return False
 
@@ -5752,6 +5750,43 @@ def move_task(t, kind):
     threading.Thread(target=work, daemon=True).start()
 
 
+SLOW_DRAWS = {}                           # window title -> [how many draws took over 40 ms, the worst one in seconds]
+
+
+def watch_draw(win, title):
+    """Time every draw of a window (children included); the slow ones are summarised in the log by report_perf()."""
+    mark = {}
+    win.connect("draw", lambda _w, _cr: (mark.__setitem__("t", time.perf_counter()), False)[-1])
+    win.connect_after("draw", lambda _w, _cr: (_note_draw(title, time.perf_counter() - mark.get("t", time.perf_counter())),
+                                                False)[-1])
+
+
+def _note_draw(title, seconds):
+    if seconds > 0.04:
+        rec = SLOW_DRAWS.setdefault(title, [0, 0.0])
+        rec[0] += 1
+        rec[1] = max(rec[1], seconds)
+
+
+def report_perf():
+    """Every 20 s: how fast typing was and which windows were slow to draw (only when there is something to say)."""
+    samples = TerminalCard._lag_samples[:]
+    del TerminalCard._lag_samples[:]
+    if samples:
+        total = sorted(t for t, _e in samples)
+        echo = sorted(e for _t, e in samples)
+        pick = lambda v, q: v[min(len(v) - 1, int(len(v) * q))]  # noqa: E731
+        print(f"kiln: typing, last 20 s: {len(samples)} keys, shown after median {pick(total, 0.5):.0f} ms / "
+              f"90% under {pick(total, 0.9):.0f} ms / worst {total[-1]:.0f} ms (the shell's echo: median "
+              f"{pick(echo, 0.5):.0f} ms)", flush=True)
+    if SLOW_DRAWS:
+        worst = sorted(SLOW_DRAWS.items(), key=lambda kv: -kv[1][1])[:4]
+        print("kiln: slow draws, last 20 s: " + "; ".join(f"{t} x{c} (worst {w * 1000:.0f} ms)" for t, (c, w) in worst),
+              flush=True)
+        SLOW_DRAWS.clear()
+    return True
+
+
 TERM_REF = [None]                         # the desktop terminal (set in main), for "Start working"
 FOCUS_REF = [None]                        # the Pomodoro card (set in main), for "Start a focus session"
 
@@ -6830,6 +6865,7 @@ def make_window(title, child, x, y, w, h, focus=False, resizable=False):
     vis = win.get_screen().get_rgba_visual()
     if vis:
         win.set_visual(vis)
+    watch_draw(win, title)                       # (connected first, so it times the whole draw)
     win.set_decorated(False)
     win.set_resizable(resizable)
     win.set_default_size(w, h)
@@ -6877,6 +6913,15 @@ def compute_layout(g, wa):
                 extra=dict(gap=gap, right=right, bar_y=bar_y, top=top, left=left, W=W, H=H, term0=(term_w, term_h)))
 
 
+def use_plain_input():
+    """Keys go straight to the terminal, not through the system input method (ibus). Typing then does not wait for
+    the input-method daemon, which added 150 ms to every key here; layouts and dead keys still work. The Settings
+    switch `terminal.system_input_method` brings it back (needed only for Chinese, Japanese, Korean and the like).
+    Must run before any widget is created."""
+    if not (CFG.get("terminal") or {}).get("system_input_method", False):
+        Gtk.Settings.get_default().set_property("gtk-im-module", "gtk-im-context-simple")
+
+
 def main():
     GLib.set_prgname("kiln")
     # single instance via pidfile
@@ -6894,6 +6939,7 @@ def main():
         # no display (e.g. the session just ended): exit cleanly so systemd does not loop
         print("kiln: no display, not starting", flush=True)
         return 0
+    use_plain_input()
     prov = Gtk.CssProvider()
     prov.load_from_data(CSS)
     Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov,
@@ -7182,6 +7228,7 @@ def main():
 
     enforce_dock_position()
     schedule_update_checks()
+    GLib.timeout_add_seconds(20, report_perf)
     cards.metrics.sample()
     GLib.timeout_add_seconds(every(2), tick)
     GLib.timeout_add_seconds(every(60), lambda: (icons.queue_draw(), True)[1])      # keeps the "recent" dots fresh

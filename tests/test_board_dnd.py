@@ -314,7 +314,19 @@ class BoardDragTests(unittest.TestCase):
         finally:
             app.subprocess = real_module
 
-    def test_a_slow_typing_echo_is_logged_and_a_fast_one_is_not(self):
+    def test_the_terminal_skips_the_system_input_method_unless_asked(self):
+        app, settings = self.app, self.Gtk.Settings.get_default()
+        before, conf = settings.get_property("gtk-im-module"), app.CFG
+        self.addCleanup(lambda: (settings.set_property("gtk-im-module", before), setattr(app, "CFG", conf)))
+        app.CFG = {"terminal": {}}
+        app.use_plain_input()
+        self.assertEqual(settings.get_property("gtk-im-module"), "gtk-im-context-simple")
+        settings.set_property("gtk-im-module", "ibus")
+        app.CFG = {"terminal": {"system_input_method": True}}
+        app.use_plain_input()
+        self.assertEqual(settings.get_property("gtk-im-module"), "ibus")
+
+    def test_typing_is_timed_and_summarised_and_slow_draws_are_named(self):
         import contextlib
         import io
         app = self.app
@@ -324,6 +336,7 @@ class BoardDragTests(unittest.TestCase):
         win.show_all()
         self.addCleanup(lambda: (win.remove(term), win.destroy()))
         self.pump(lambda: False, seconds=0.5)
+        del app.TerminalCard._lag_samples[:]
 
         def type_and_echo(delay):
             ev = self.Gdk.EventKey()
@@ -332,15 +345,27 @@ class BoardDragTests(unittest.TestCase):
             time.sleep(delay)                                                              # the shell takes this long
             term.term.feed(b"a")                                                           # ... and the echo arrives
             self.pump(lambda: not term._lag["key"], seconds=3)
+        type_and_echo(0.0)
+        type_and_echo(0.25)
+        (fast, _), (slow, echo) = app.TerminalCard._lag_samples
+        self.assertLess(fast, 100)
+        self.assertGreater(slow, 240)
+        self.assertGreater(echo, 240)                                                      # most of it was before the echo
+        app.SLOW_DRAWS.clear()
+        app._note_draw("Kiln Cards", 0.2)
+        app._note_draw("Kiln Cards", 0.05)
+        app._note_draw("Kiln Fast", 0.01)                                                  # quick draws are not noted
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            app.TerminalCard._lag.update(logged=0.0)
-            type_and_echo(0.0)
-            self.assertEqual(buf.getvalue(), "")                                           # fast: nothing logged
-            type_and_echo(0.25)
+            app.report_perf()
         out = buf.getvalue()
-        self.assertIn("kiln: typing lag", out)
-        self.assertIn("the shell answered after 2", out)                                    # ~250 ms of it was the shell
+        self.assertIn("typing, last 20 s: 2 keys", out)
+        self.assertIn("slow draws, last 20 s: Kiln Cards x2 (worst 200 ms)", out)
+        self.assertNotIn("Kiln Fast", out)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            app.report_perf()
+        self.assertEqual(buf.getvalue(), "")                                                # nothing new: nothing said
 
     def test_every_department_of_the_task_is_tried(self):
         app = self.app
