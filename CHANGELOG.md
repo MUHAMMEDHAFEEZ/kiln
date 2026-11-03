@@ -11,6 +11,8 @@
   `CANBERRA_DRIVER=null`, so a stuck sound server cannot freeze Kiln's windows. Focus dimming can be switched off
   (`modes.focus_dim`; off by itself on weak computers). A switch that takes over 0.4 s, and a stall over 2 s, leave a line in
   `kiln logs`.
+* A slow typing echo (key press → the shell's answer → the drawn frame, over 150 ms) leaves a line in `kiln logs`, saying whether the
+  shell or the drawing was slow.
 * `kiln debug` prints what Kiln is doing right now (run it while something seems frozen) and its last log lines.
 * **Time on tasks:** Start also starts a clock (shown in the work bar and on the card); finishing the task or starting
   another ends it. `kiln time` reports per project and task; the standup shows it. Start now tries every department of a task,

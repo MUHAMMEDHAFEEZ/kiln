@@ -1878,7 +1878,28 @@ class TerminalCard(Gtk.Box):
             pass
         t.connect("key-press-event", self.on_key)
         t.connect("button-press-event", self.on_term_button)
+        t.connect("contents-changed", self._echo)
         return t
+
+    # --- typing lag probe: a key press, the shell's echo, the frame that shows it. A slow one leaves a line in the log
+    _lag = {"key": 0.0, "echo": 0.0, "logged": 0.0}
+
+    def _echo(self, _term):
+        lag = self._lag
+        if lag["key"] and not lag["echo"]:
+            lag["echo"] = time.perf_counter()
+            self.add_tick_callback(self._frame)
+
+    def _frame(self, _w, _clock):
+        lag, now = self._lag, time.perf_counter()
+        if lag["key"] and lag["echo"]:
+            total, echo = now - lag["key"], lag["echo"] - lag["key"]
+            if total > 0.15 and now - lag["logged"] > 5:
+                lag["logged"] = now
+                print(f"kiln: typing lag {total * 1000:.0f} ms (the shell answered after {echo * 1000:.0f} ms, "
+                      f"the frame was drawn {(total - echo) * 1000:.0f} ms later)", flush=True)
+        lag["key"] = lag["echo"] = 0.0
+        return False
 
     def set_font_pt(self, pt):
         self.font_pt = pt
@@ -2159,6 +2180,8 @@ class TerminalCard(Gtk.Box):
         mods = ev.state & Gtk.accelerator_get_default_mod_mask()
         cs = Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
         kv = ev.keyval
+        if 0x20 <= kv < 0x7f and not self._lag["key"]:                 # a printable key: time how long until it shows
+            self._lag["key"], self._lag["echo"] = time.perf_counter(), 0.0
         if mods == cs and kv in (Gdk.KEY_C, Gdk.KEY_c):
             self.term.copy_clipboard_format(Vte.Format.TEXT)
         elif mods == cs and kv in (Gdk.KEY_V, Gdk.KEY_v):

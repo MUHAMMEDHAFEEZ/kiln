@@ -314,6 +314,34 @@ class BoardDragTests(unittest.TestCase):
         finally:
             app.subprocess = real_module
 
+    def test_a_slow_typing_echo_is_logged_and_a_fast_one_is_not(self):
+        import contextlib
+        import io
+        app = self.app
+        term = self.make_terminal()
+        win = self.Gtk.Window()                                    # drawn frames need a window on screen
+        win.add(term)
+        win.show_all()
+        self.addCleanup(lambda: (win.remove(term), win.destroy()))
+        self.pump(lambda: False, seconds=0.5)
+
+        def type_and_echo(delay):
+            ev = self.Gdk.EventKey()
+            ev.type, ev.keyval, ev.state = self.Gdk.EventType.KEY_PRESS, 0x61, 0           # the key "a"
+            term.on_key(None, ev)
+            time.sleep(delay)                                                              # the shell takes this long
+            term.term.feed(b"a")                                                           # ... and the echo arrives
+            self.pump(lambda: not term._lag["key"], seconds=3)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            app.TerminalCard._lag.update(logged=0.0)
+            type_and_echo(0.0)
+            self.assertEqual(buf.getvalue(), "")                                           # fast: nothing logged
+            type_and_echo(0.25)
+        out = buf.getvalue()
+        self.assertIn("kiln: typing lag", out)
+        self.assertIn("the shell answered after 2", out)                                    # ~250 ms of it was the shell
+
     def test_every_department_of_the_task_is_tried(self):
         app = self.app
         flutter = self.git_repo("flutter")
