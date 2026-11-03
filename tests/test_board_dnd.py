@@ -11,6 +11,7 @@ import time
 import unittest
 
 ROOT = os.path.join(os.path.dirname(__file__), "..", "share")
+os.environ.setdefault("CANBERRA_DRIVER", "null")        # a stuck sound server must not freeze the test windows
 
 
 def tasks():
@@ -237,6 +238,81 @@ class BoardDragTests(unittest.TestCase):
             app.ACC.sync = real_sync
         self.assertEqual(writes, [("rec1", "Completed")])
         self.assertIsNone(app.TL.active())
+
+    def make_terminal(self):
+        """A real TerminalCard that is closed again (its shells would keep the test process waiting at exit)."""
+        term = self.app.TerminalCard()
+
+        def close():
+            for tab in term.tabs:
+                for pane in tab["panes"]:
+                    if pane.get("pid"):
+                        try:
+                            os.kill(pane["pid"], 9)
+                        except OSError:
+                            pass
+            term.destroy()
+        self.addCleanup(close)
+        return term
+
+    def test_the_terminal_never_waits_for_git_on_the_main_thread(self):
+        app = self.app
+        slow = []
+
+        def slow_git(path, *args, **kw):                      # a huge repository: git takes a second and a half
+            slow.append(args)
+            time.sleep(1.5)
+            return "/some/repo"
+        real_git, app._git = app._git, slow_git
+        try:
+            term = self.make_terminal()
+            t0 = time.time()
+            first = term._repo_of("/slow/folder")             # what the footer draw calls
+            self.assertLess(time.time() - t0, 0.3)            # it answered at once ...
+            self.assertIsNone(first)                          # ... with "not known yet", not by waiting
+            self.pump(lambda: term._repo_cache.get("/slow/folder"), seconds=4)
+            self.assertEqual(term._repo_cache["/slow/folder"], "/some/repo")      # the answer arrived later
+            t0 = time.time()
+            self.assertEqual(term._repo_of("/slow/folder"), "/some/repo")
+            self.assertLess(time.time() - t0, 0.1)
+        finally:
+            app._git = real_git
+
+    def test_the_gpu_and_the_branch_questions_run_in_the_background(self):
+        app = self.app
+        import subprocess
+        import types
+        real_module = app.subprocess
+        calls = []
+
+        def slow_run(cmd, *a, **kw):
+            calls.append(cmd[0])
+            time.sleep(1.5)
+            return subprocess.CompletedProcess(cmd, 0, stdout="42\n", stderr="")
+        stub = types.SimpleNamespace(**vars(subprocess))           # only the app sees the slow commands
+        stub.run = slow_run
+        app.subprocess = stub
+        try:
+            m = app.Metrics()
+            gpu_dir = f"{self.tmp.name}/gpu"
+            os.makedirs(f"{gpu_dir}/power")
+            with open(f"{gpu_dir}/power/runtime_status", "w") as f:
+                f.write("active")
+            m._gpu_dev, m._gpu_t = gpu_dir, 0
+            t0 = time.time()
+            m.sample()                                          # the 2-second tick
+            self.assertLess(time.time() - t0, 0.3)
+            self.pump(lambda: m.gpu == 42.0, seconds=4)
+            self.assertEqual(m.gpu, 42.0)
+            self.assertIn("nvidia-smi", calls)
+            term = self.make_terminal()
+            t0 = time.time()
+            term._update_branch()
+            self.assertLess(time.time() - t0, 0.3)
+            self.pump(lambda: term.branch == "42", seconds=4)
+            self.assertEqual(term.branch, "42")
+        finally:
+            app.subprocess = real_module
 
     def test_every_department_of_the_task_is_tried(self):
         app = self.app

@@ -461,19 +461,22 @@ class Metrics:
         if self._gpu_dev and time.time() - self._gpu_t > 15:
             self._gpu_t = time.time()
             try:
-                st = open(self._gpu_dev + "/power/runtime_status").read().strip()
+                with open(self._gpu_dev + "/power/runtime_status") as f:
+                    st = f.read().strip()
             except OSError:
                 st = "active"
             if st == "suspended":
                 self.gpu = 0.0
             else:
-                try:
-                    out = subprocess.run(
-                        ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
-                        capture_output=True, text=True, timeout=3).stdout.strip().splitlines()
-                    self.gpu = float(out[0]) if out else 0.0
-                except (OSError, ValueError, subprocess.SubprocessError):
-                    self.gpu = 0.0
+                threading.Thread(target=self._read_gpu, daemon=True).start()     # never wait for it on the main thread
+
+    def _read_gpu(self):
+        try:
+            out = subprocess.run(["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
+                                 capture_output=True, text=True, timeout=3).stdout.strip().splitlines()
+            self.gpu = float(out[0]) if out else 0.0
+        except (OSError, ValueError, subprocess.SubprocessError):
+            self.gpu = 0.0
 
     @staticmethod
     def mem():
@@ -2127,12 +2130,25 @@ class TerminalCard(Gtk.Box):
         return True
 
     def _update_branch(self):
-        try:
-            out = subprocess.run(["git", "-C", self.tabs[self.active]["cwd"], "rev-parse", "--abbrev-ref", "HEAD"],
-                                 capture_output=True, text=True, timeout=1)
-            self.branch = out.stdout.strip() if out.returncode == 0 else ""
-        except (OSError, subprocess.SubprocessError):
-            self.branch = ""
+        """Ask git for the branch in a worker thread (in a big repository this takes seconds, and the terminal
+        must never freeze while it does)."""
+        cwd = self.tabs[self.active]["cwd"]
+
+        def work():
+            try:
+                out = subprocess.run(["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True,
+                                     text=True, timeout=3)
+                branch = out.stdout.strip() if out.returncode == 0 else ""
+            except (OSError, subprocess.SubprocessError):
+                branch = ""
+            GLib.idle_add(self._set_branch, cwd, branch)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _set_branch(self, cwd, branch):
+        if self.tabs and cwd == self.tabs[self.active]["cwd"]:
+            self.branch = branch
+            self.foot.queue_draw()
+        return False
 
     @staticmethod
     def short(p):
@@ -2341,11 +2357,21 @@ class TerminalCard(Gtk.Box):
     _repo_cache = {}
 
     def _repo_of(self, cwd):
-        """Git folder that contains `cwd`, or None (looked up once per folder)."""
+        """Git folder that contains `cwd`, or None. Looked up once per folder, in a worker thread: until the answer
+        arrives the buttons are the plain ones, and the draw never waits for git."""
         if cwd not in self._repo_cache:
-            top = _git(cwd, "rev-parse", "--show-toplevel", timeout=2)
-            self._repo_cache[cwd] = top if top and top not in (HOME, "/") else None
+            self._repo_cache[cwd] = None
+
+            def work():
+                top = _git(cwd, "rev-parse", "--show-toplevel", timeout=4)
+                GLib.idle_add(self._repo_found, cwd, top if top and top not in (HOME, "/") else None)
+            threading.Thread(target=work, daemon=True).start()
         return self._repo_cache[cwd]
+
+    def _repo_found(self, cwd, top):
+        self._repo_cache[cwd] = top
+        self.foot.queue_draw()
+        return False
 
     def on_foot_motion(self, _w, ev):
         self.set_hover(self._hit(self.fhits, ev.x, ev.y))
@@ -6839,7 +6865,7 @@ def main():
     # journal (journalctl --user -u kiln); `kill -USR2 <pid>` dumps it on demand
     import faulthandler
     faulthandler.register(signal.SIGUSR2, all_threads=True)
-    GLib.timeout_add(int(1000 * SLOW), lambda: (faulthandler.dump_traceback_later(int(4 * SLOW)), True)[1])
+    GLib.timeout_add(int(1000 * SLOW), lambda: (faulthandler.dump_traceback_later(max(2, int(2 * SLOW))), True)[1])   # a 2 s stall leaves its stack in the log
 
     if Gdk.Screen.get_default() is None:
         # no display (e.g. the session just ended): exit cleanly so systemd does not loop
@@ -6943,25 +6969,33 @@ def main():
     ex = L["extra"]
     state = {"mode": "overview"}
 
+    banner_lock = threading.Lock()
+
     def set_banners(on):
-        """Focus mode silences notification banners; the previous setting is restored afterwards."""
-        saved = f"{CACHE}/banners-saved"
-        schema = ["org.gnome.desktop.notifications", "show-banners"]
-        if not on:
-            if os.path.exists(saved):
-                prev = open(saved, encoding="utf-8").read().strip() or "true"
-                run(["gsettings", "set", *schema, prev])
-                os.remove(saved)
-            return
-        if not (CFG.get("modes") or {}).get("focus_mutes_notifications", True) or os.path.exists(saved):
-            return
-        try:
-            cur = subprocess.run(["gsettings", "get", *schema], capture_output=True, text=True, timeout=3).stdout.strip()
-        except (OSError, subprocess.SubprocessError):
-            return
-        with open(saved, "w", encoding="utf-8") as f:
-            f.write(cur)
-        run(["gsettings", "set", *schema, "false"])
+        """Focus mode silences notification banners; the previous setting is restored afterwards. Done in a worker
+        thread: `gsettings` can take a moment, and switching modes must not wait for it."""
+        def work():
+            with banner_lock:
+                saved = f"{CACHE}/banners-saved"
+                schema = ["org.gnome.desktop.notifications", "show-banners"]
+                if not on:
+                    if os.path.exists(saved):
+                        with open(saved, encoding="utf-8") as f:
+                            prev = f.read().strip() or "true"
+                        subprocess.run(["gsettings", "set", *schema, prev], capture_output=True, timeout=10)
+                        os.remove(saved)
+                    return
+                if not (CFG.get("modes") or {}).get("focus_mutes_notifications", True) or os.path.exists(saved):
+                    return
+                try:
+                    cur = subprocess.run(["gsettings", "get", *schema], capture_output=True, text=True,
+                                         timeout=5).stdout.strip()
+                except (OSError, subprocess.SubprocessError):
+                    return
+                with open(saved, "w", encoding="utf-8") as f:
+                    f.write(cur)
+                subprocess.run(["gsettings", "set", *schema, "false"], capture_output=True, timeout=10)
+        threading.Thread(target=work, daemon=True).start()
 
     def place(win, x, y, w=None, h=None):
         win._pos = (g.x + x, g.y + y)
@@ -6970,6 +7004,7 @@ def main():
             win.resize(w, h)
 
     def apply_mode(name, remember=True):
+        t_start = time.time()
         name = name if name in MODES and (name != "tasks" or bigboard) else "overview"
         state["mode"] = name
         top, gap, bar_y, left = ex["top"], ex["gap"], ex["bar_y"], ex["left"]
@@ -6992,7 +7027,8 @@ def main():
         elif name == "focus":
             tw, th = min(1700, int(ex["W"] * 0.62)), min(bar_y - gap - top, 940)
             tx, ty = (ex["W"] - tw) // 2, top + (bar_y - gap - top - th) // 2
-            show, veil, term.alpha, pt = {"term", "bar"}, True, 0.97, 13
+            dim = (CFG.get("modes") or {}).get("focus_dim", not LIGHT)      # a full-screen dimming layer; off on weak machines
+            show, veil, term.alpha, pt = {"term", "bar"}, bool(dim), 0.97, 13
         elif name == "tasks" and bigboard:
             bx = left + CARDS_W + gap
             bw_, bh_ = ex["W"] - bx - ex["right"], bar_y - gap - top
@@ -7037,6 +7073,8 @@ def main():
                 pass
         if name in ("coding", "focus"):
             term.term.grab_focus()
+        if time.time() - t_start > 0.4:                  # a slow switch leaves a line in the log (kiln logs)
+            print(f"kiln: switching to {name} took {time.time() - t_start:.1f}s", flush=True)
 
     qbar.on_mode = apply_mode
 

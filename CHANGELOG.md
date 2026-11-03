@@ -6,6 +6,11 @@
   working on also shows in Today. See `docs/ACCOUNTS.md`.
 * The board shows a status bar and filter in red (not started), yellow (ongoing) and green (completed). You can add a task
   (`+ New task`, `kiln newtask`), move a task between statuses (click its dot, or right-click) and complete it from Today.
+* Freezes: git (the terminal's branch and footer buttons), the GPU reading and the notification switch of Focus mode no longer
+  run on the main thread, so a big repository or a slow command cannot freeze the terminal. The service starts with
+  `CANBERRA_DRIVER=null`, so a stuck sound server cannot freeze Kiln's windows. Focus dimming can be switched off
+  (`modes.focus_dim`; off by itself on weak computers). A switch that takes over 0.4 s, and a stall over 2 s, leave a line in
+  `kiln logs`.
 * **Time on tasks:** Start also starts a clock (shown in the work bar and on the card); finishing the task or starting
   another ends it. `kiln time` reports per project and task; the standup shows it. Start now tries every department of a task,
   never guesses a folder (it must be a git repository) and, when none matches, asks once and remembers the answer.

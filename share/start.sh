@@ -15,10 +15,13 @@ if [ -f "$CACHE/app.pid" ]; then          # an instance started without systemd
 fi
 sleep 0.5
 
+# CANBERRA_DRIVER=null: GTK's event-sound module must never wait for the sound server (when the audio driver hangs, every
+# GTK window of a program that talks to it freezes for 30 s; Kiln plays its own sounds with paplay, in another process)
 # /usr/bin/python3 on purpose: a virtualenv earlier in PATH usually has no GTK bindings
 systemd-run --user --unit="$UNIT" --description="Kiln desktop" \
   -p Restart=on-failure -p RestartSec=2 \
   -E GDK_BACKEND=x11 -E PYTHONFAULTHANDLER=1 -E PYTHONUNBUFFERED=1 \
+  -E CANBERRA_DRIVER=null \
   -E DISPLAY="${DISPLAY:-:0}" ${XAUTHORITY:+-E XAUTHORITY="$XAUTHORITY"} \
   ${KILN_CONFIG:+-E KILN_CONFIG="$KILN_CONFIG"} ${KILN_CACHE:+-E KILN_CACHE="$KILN_CACHE"} \
   /usr/bin/python3 -X faulthandler "$D/app.py" >/dev/null 2>&1

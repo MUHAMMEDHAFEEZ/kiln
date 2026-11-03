@@ -40,7 +40,7 @@ DEFAULTS = {
     "now_playing": {"youtube_music_only": False},
     "lock_screen": {"widgets": True, "brightness": 0.72, "blur": 0},
     "terminal": {"project_commands": True},
-    "modes": {"focus_mutes_notifications": True},
+    "modes": {"focus_mutes_notifications": True, "focus_dim": True},
     "icons": {"recent_dot": True, "recent_hours": 48},
     "dock": {"cards": ["git", "board", "system", "day", "notes", "tests"], "position": "left"},
     "week_start": "sun",
@@ -507,6 +507,9 @@ class Settings(Gtk.Window):
         box.pack_start(self.switch("modes.focus_mutes_notifications", "Focus mode silences notifications",
                                    "Switch modes from the work bar, or with Super+J. Banners come back when you leave Focus."),
                        False, False, 0)
+        box.pack_start(self.switch("modes.focus_dim", "Dim the screen in Focus mode",
+                                   "A dark layer over the wallpaper behind the terminal. Turn it off if Focus feels slow "
+                                   "(it is off by itself on weak computers)."), False, False, 0)
         box.pack_start(self.switch("icons.recent_dot", "Dot on recently changed desktop icons",
                                    "A small dot marks folders and files changed in the last two days."),
                        False, False, 0)

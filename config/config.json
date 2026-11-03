@@ -14,7 +14,7 @@
   "now_playing": { "youtube_music_only": false },
   "lock_screen": { "widgets": true, "brightness": 0.72, "blur": 0 },
   "terminal": { "project_commands": true },
-  "modes": { "focus_mutes_notifications": true },
+  "modes": { "focus_mutes_notifications": true, "focus_dim": true },
   "icons": { "recent_dot": true, "recent_hours": 48 },
   "dock": { "cards": ["git", "board", "system", "day", "notes", "tests"], "position": "left" },
   "performance": "auto",
