@@ -43,6 +43,7 @@ Setup
   settings [page]          open the Kiln Settings window (page: accounts, themes, general ...)
   config                   open ~/.config/kiln/config.json
   doctor                   check dependencies and the installation
+  debug                    while Kiln seems frozen: print what it is doing right now, and its last log lines
   version
 EOF
 }
@@ -141,6 +142,11 @@ case "$cmd" in
   settings) setsid /usr/bin/python3 "$SHARE/settings.py" "$@" >/dev/null 2>&1 & ;;
   config)  [ -f "$CONF/config.json" ] || die "no config yet, run ./install.sh"; xdg-open "$CONF/config.json" >/dev/null 2>&1 & ;;
   doctor)  doctor ;;
+  debug)
+    pid="$(cat "$CACHE/app.pid" 2>/dev/null)"; [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || die "Kiln is not running"
+    kill -USR2 "$pid"; sleep 1
+    echo "--- what Kiln is doing (the first block is the main thread: if it is stuck in subprocess/select, something is waiting)"
+    journalctl --user -u kiln --no-pager -n 45 ;;
   version|-v|--version) echo "kiln $VERSION"; /usr/bin/python3 "$SHARE/update.py" status 2>/dev/null | grep -E "^(newest|last check)" || true ;;
   help|-h|--help) usage ;;
   *) usage; exit 1 ;;
