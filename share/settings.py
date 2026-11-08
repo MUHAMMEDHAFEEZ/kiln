@@ -40,6 +40,7 @@ DEFAULTS = {
     "now_playing": {"youtube_music_only": False},
     "lock_screen": {"widgets": True, "brightness": 0.72, "blur": 0},
     "terminal": {"project_commands": True, "system_input_method": False},
+    "books": {"dirs": ["~/Books"], "theme": "auto", "daily_goal_minutes": 20, "eye_break_minutes": 30},
     "modes": {"focus_mutes_notifications": True, "focus_dim": True},
     "icons": {"recent_dot": True, "recent_hours": 48},
     "dock": {"cards": ["git", "board", "system", "day", "notes", "tests"], "position": "left"},
@@ -517,7 +518,37 @@ class Settings(Gtk.Window):
         box.pack_start(self.switch("icons.recent_dot", "Dot on recently changed desktop icons",
                                    "A small dot marks folders and files changed in the last two days."),
                        False, False, 0)
+        self.build_books(box)
         return box
+
+    def build_books(self, box):
+        """The Books mode: where the PDFs are, how the pages look, the daily goal and eye breaks."""
+        books = self.cfg.get("books") or {}
+        box.pack_start(label("Books", "kiln-section"), False, False, 0)
+        folder = Gtk.FileChooserButton(title="Books folder", action=Gtk.FileChooserAction.SELECT_FOLDER)
+        dirs = books.get("dirs") or ["~/Books"]
+        os.makedirs(os.path.expanduser(dirs[0]), exist_ok=True)
+        folder.set_filename(os.path.expanduser(dirs[0]))
+        folder.connect("file-set", lambda c: self.set("books.dirs", [c.get_filename()]))
+        box.pack_start(self.row("Books folder", folder, "PDFs in this folder and the folders inside it show in the Books "
+                                "mode. You can also drop PDFs on it, or press Add book."), False, False, 0)
+        theme = Gtk.ComboBoxText()
+        for k, n in (("auto", "Auto (dark in the evening)"), ("light", "Light"), ("sepia", "Sepia"), ("night", "Night")):
+            theme.append(k, n)
+        theme.set_active_id(books.get("theme", "auto") if books.get("theme") in ("auto", "light", "sepia", "night") else "auto")
+        theme.connect("changed", lambda c: self.set("books.theme", c.get_active_id()))
+        box.pack_start(self.row("Page colours", theme, "Press d in the reader to change it. Sepia and Night are gentler "
+                                "on the eyes in a dim room."), False, False, 0)
+        goal = Gtk.SpinButton.new_with_range(5, 300, 5)
+        goal.set_value(int(books.get("daily_goal_minutes", 20) or 20))
+        goal.connect("value-changed", lambda s: self.set("books.daily_goal_minutes", int(s.get_value())))
+        box.pack_start(self.row("Daily reading goal (minutes)", goal, "The ring in the library fills as you read."),
+                       False, False, 0)
+        eye = Gtk.SpinButton.new_with_range(0, 120, 5)
+        eye.set_value(int(books.get("eye_break_minutes", 30) or 0))
+        eye.connect("value-changed", lambda s: self.set("books.eye_break_minutes", int(s.get_value())))
+        box.pack_start(self.row("Eye break reminder (minutes, 0 = off)", eye, "After this long of reading without a pause "
+                                "Kiln reminds you to look at something far away for 20 seconds."), False, False, 0)
 
     def build_updates(self, box):
         import update as UP

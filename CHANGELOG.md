@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+* **Books mode**: a fifth mode for your PDFs. A library with covers, *Continue reading*, filters and a reading-statistics strip
+  (today against a goal, streak, pages, the week), and a reader with continuous scrolling, zoom, search, a table of contents,
+  bookmarks, four highlight colours with notes, sepia and night pages, a progress bar and links. Time and pages read are counted
+  while you read, and an eye-break reminder comes after 30 minutes. Needs `gir1.2-poppler-0.18`. `kiln books`,
+  `kiln mode books`, Settings → Desktop → Books. See `docs/BOOKS.md`.
 * **Lark Base**: a new service and a **Tasks board** card with a tab per list (projects, your own tasks); what you are
   working on also shows in Today. See `docs/ACCOUNTS.md`.
 * The board shows a status bar and filter in red (not started), yellow (ongoing) and green (completed). You can add a task

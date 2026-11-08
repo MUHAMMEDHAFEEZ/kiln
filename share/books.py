@@ -186,10 +186,20 @@ class Store:
         d = _read(self.path, {})
         self.books = d.get("books") if isinstance(d.get("books"), dict) else {}
         self.log = d.get("log") if isinstance(d.get("log"), dict) else {}
+        self.prefs = d.get("prefs") if isinstance(d.get("prefs"), dict) else {}
         self.dirty = False
 
+    def pref(self, key, default=None):
+        """A choice made in the reader itself (the page theme)."""
+        v = self.prefs.get(key, default)
+        return v if (key != "theme" or v in THEMES) else default
+
+    def set_pref(self, key, value):
+        if self.prefs.get(key) != value:
+            self.prefs[key], self.dirty = value, True
+
     def save(self):
-        _write(self.path, dict(books=self.books, log=self.log))
+        _write(self.path, dict(books=self.books, log=self.log, prefs=self.prefs))
         self.dirty = False
 
     def flush(self):
@@ -208,7 +218,7 @@ class Store:
             b = self.books[bid] = {}
         for key, (kind, default) in self.FIELDS.items():
             cur = b.get(key)
-            if not isinstance(cur, kind) or (isinstance(cur, bool) and kind != bool):
+            if key not in b or not isinstance(cur, kind) or (isinstance(cur, bool) and kind != bool):
                 b[key] = [] if kind is list else default
         return b
 

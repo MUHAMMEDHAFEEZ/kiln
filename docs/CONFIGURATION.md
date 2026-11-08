@@ -25,6 +25,7 @@ All settings live in **`~/.config/kiln/config.json`**. Open it with `kiln config
   "lock_screen": { "widgets": true, "brightness": 0.72, "blur": 0 },
 
   "terminal": { "project_commands": true, "system_input_method": false },
+  "books": { "dirs": ["~/Books"], "theme": "auto", "daily_goal_minutes": 20, "eye_break_minutes": 30 },
   "modes": { "focus_mutes_notifications": true, "focus_dim": true },
   "icons": { "recent_dot": true, "recent_hours": 48 },
   "dock": { "cards": ["git", "system", "day", "notes", "tests"] },
@@ -82,6 +83,18 @@ They are calculated on your machine and follow your system's time zone and dayli
 | `modes.focus_mutes_notifications` | `true` | Focus mode turns notification banners off and puts your previous setting back when you leave it (also after a crash or a restart). |
 | `icons.recent_dot` | `true` | A dot on desktop items changed within `recent_hours`. A folder also counts when a project inside it has a recent commit. |
 | `icons.recent_hours` | `48` | How long an item counts as recent. |
+
+## Books
+
+The Books mode ([BOOKS.md](BOOKS.md)). Also in Settings → Desktop → Books.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `books.dirs` | `["~/Books"]` | Folders with your PDFs (and the folders inside them). New books you add are copied into the first one. |
+| `books.theme` | `"auto"` | Page colours: `auto` (dark from 19:00 to 06:00), `light`, `sepia` or `night`. The `d` key in the reader changes it and remembers the choice. |
+| `books.daily_goal_minutes` | `20` | The goal the ring in the library fills towards. |
+| `books.eye_break_minutes` | `30` | Reminder to rest your eyes after this many minutes of reading without a pause; `0` turns it off. |
+| `notifications.books` | `true` | The eye-break reminder also as a desktop notification. |
 
 ## Dock cards (big screens)
 
@@ -141,6 +154,7 @@ colours. The keys below control the rest of the system.
 | File | What it is |
 |---|---|
 | `accounts.json` | The details of your connected accounts, readable only by you ([ACCOUNTS.md](ACCOUNTS.md)) |
+| `books.json` | What you did in the Books mode: where you stopped, bookmarks, highlights, notes and the reading log (private) |
 | `todo.txt` | Your personal list (`[ ] item` / `[x] item`, one per line) |
 | `project-todos/<repo>.txt` | Each project's list (`kiln tasks`) |
 | `quick-commands.txt` | Buttons under the desktop terminal |

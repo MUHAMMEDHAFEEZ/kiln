@@ -65,6 +65,7 @@ if [ ${#missing[@]} -gt 0 ]; then
     exit 1
   fi
 fi
+py 'import gi; gi.require_version("Poppler","0.18"); from gi.repository import Poppler' || warn "The Books mode (PDF reader) needs gir1.2-poppler-0.18: sudo apt install gir1.2-poppler-0.18"
 command -v gh >/dev/null || warn "GitHub CLI (gh) not found: the GitHub card stays empty until you install it and run 'gh auth login'."
 
 # ------------------------------------------------------------------ restore point (first install only)

@@ -5,7 +5,6 @@ import os
 import stat
 import sys
 import tempfile
-import time
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "share"))
@@ -112,6 +111,23 @@ class StoreTests(Base):
         self.assertEqual((self.store.status("a"), self.store.progress("a")), ("unread", 0.0))
         self.store.mark_finished("a")
         self.assertEqual(self.store.status("a"), "finished")
+
+    def test_a_new_book_has_every_field(self):
+        b = self.store.book("new")
+        self.assertEqual(set(b), set(B.Store.FIELDS))
+        self.assertIsNone(b["zoom"])
+        self.assertEqual((b["bookmarks"], b["highlights"], b["notes"]), ([], [], []))
+        self.store.set_zoom("new", 1.5)
+        self.assertEqual(self.store.book("new")["zoom"], 1.5)
+        self.store.set_zoom("new", None)
+        self.assertIsNone(self.store.book("new")["zoom"])
+
+    def test_choices_made_in_the_reader_are_kept(self):
+        self.store.set_pref("theme", "night")
+        self.store.flush()
+        self.assertEqual(B.Store(self.store.path).pref("theme", "light"), "night")
+        self.store.set_pref("theme", "plaid")
+        self.assertEqual(self.store.pref("theme", "light"), "light")                  # a value that is not a theme
 
     def test_position_is_kept_in_range(self):
         self.store.set_position("a", 5000, 7.0, pages=10)

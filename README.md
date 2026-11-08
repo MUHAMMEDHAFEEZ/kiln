@@ -36,7 +36,8 @@ and a lock screen that is actually useful, all in eight paper-cut themes.**
 | **Work bar** | Detects the projects you have open (VS Code windows, Claude Code sessions, terminals) and lets you switch between them. It shows the branch, ahead/behind, changes, pull request and CI status, the last commit, and a **tests** button that runs the project's tests and keeps the result. It also lists your running dev servers, local services and Docker containers, which you can open, stop or hide. At its right end: **Overview / Coding / Focus** modes. |
 | **Tasks board** | A table from Lark Base as a card with a tab per list (for example your projects and yours), a status bar and filter (red not started, yellow ongoing, green completed), owner, priority and deadline. Add tasks, move them between statuses (drag a card to another column), start working on one (a terminal on a branch named after it), write your standup note, get notified when a task is assigned to you, and open a full **Tasks mode** with a column per status. Connect it under Settings → Accounts ([docs/ACCOUNTS.md](docs/ACCOUNTS.md)). |
 | **Dock cards** | On a big screen (about 2500 px wide and up) Kiln fills the free space beside the terminal with cards: **Git** (changed files and recent commits of the current project, click to open), **System** (CPU, memory, GPU, network, disk and the busiest programs), **Today** (month calendar, Hijri date and prayer times), **Notes** (a scratchpad per project, plus a global one) and **Tests** (status, a run button and the tail of the last log; without a test command it lists the project's scripts). An optional **Running** card lists dev servers and Docker containers. The clock card shows the Hijri date and the next prayer. A laptop screen gets no dock cards. |
-| **Modes** | **Overview**: every card. **Coding**: a wide terminal with Git, Tests and Notes stacked in a column on its right. **Focus**: one large, near-opaque terminal in bigger type on a dimmed screen, with a timer pill in its header, and notification banners are silenced until you leave. **Tasks** (when a Lark Base is connected): the whole screen is the board. Switch from the work bar, with **Super+J**, or `kiln mode`. |
+| **Books** | A **Books mode** for your PDFs: a library with covers and *Continue reading*, reading statistics (goal, streak, week) and a reader with search, contents, bookmarks, highlights and notes, sepia and night pages and an eye-break reminder ([docs/BOOKS.md](docs/BOOKS.md)). |
+| **Modes** | **Overview**: every card. **Coding**: a wide terminal with Git, Tests and Notes stacked in a column on its right. **Focus**: one large, near-opaque terminal in bigger type on a dimmed screen, with a timer pill in its header, and notification banners are silenced until you leave. **Tasks** (when a Lark Base is connected): the whole screen is the board. **Books**: your PDF library and reader. Switch from the work bar, with **Super+J**, or `kiln mode`. |
 | **Desktop icons** | Folder icons in the theme's colours, with per-folder colour and symbol, drag and drop, multi-select, rename and trash. A dot marks what changed in the last two days, and *Group icons by type* (right-click the desktop) puts project folders, other folders and files in rows of their own. |
 | **Launcher** (Super+K) | Search apps, projects, desktop items and recent files, do maths, run `>commands`, add todos and switch themes, or search the web. |
 | **Top bar** | Workspace badge and desktop name, a search pill, the date on the right, and themed menus, quick settings, notifications, OSD and Alt+Tab. Click the clock card on the desktop for a prayer-times popup. |
@@ -52,6 +53,7 @@ and a lock screen that is actually useful, all in eight paper-cut themes.**
   * [GitHub CLI](https://cli.github.com/) for the GitHub card and the PR/CI status.
   * [`lark-cli`](https://github.com/larksuite/cli) for Lark tasks and calendar.
   * `python3-dateutil`, for recurring events in a connected calendar.
+  * `gir1.2-poppler-0.18`, for the Books mode (the PDF reader).
   * Claude Code, for the project task view.
 
 ## Install
@@ -118,7 +120,8 @@ The `kiln` command:
 ```text
 kiln start | stop | restart | status | logs
 kiln theme                 list themes          kiln theme sepia    switch theme
-kiln mode coding           switch mode (overview | coding | focus | next)
+kiln mode coding           switch mode (overview | coding | focus | tasks | books | next)
+kiln books                 your PDF library and progress    kiln books stats   reading time and streak
 kiln test                  run the tests of the project shown in the work bar
 kiln todo add "Ship it"    personal list        kiln todo done 2
 kiln tasks add "Fix login" list of the project in the current folder (-C <dir> for another)

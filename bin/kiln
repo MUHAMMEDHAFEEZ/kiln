@@ -30,7 +30,7 @@ Lists
       cmd: ls | add <text> | done <n> | undo <n> | rm <n> | clear | path
 
 Setup
-  mode [name]              switch the desktop mode: overview | coding | focus | next
+  mode [name]              switch the desktop mode: overview | coding | focus | tasks | books | next
   test                     run the tests of the project shown in the work bar
   accounts                 list the connected task and calendar services
   connect <service>        connect Todoist, Trello, Linear, Asana, Jira, Notion, ClickUp, Slack, a calendar ...
@@ -38,6 +38,7 @@ Setup
   sync                     refresh the tasks and meetings now
   time [today|week]        the time you spent on tasks (starts when you press Start working on a task)
   standup                  a note of what you finished, what you are on and what is next (from your Lark Base board)
+  books [stats]            your PDF library and how far you are in each book (stats: reading time and streak)
   newtask [options]        add a task to your Lark Base board (no options: a window; see newtask --help)
   update [--check|--yes]   look for a newer release and install it (--rollback goes back one version)
   settings [page]          open the Kiln Settings window (page: accounts, themes, general ...)
@@ -131,6 +132,7 @@ case "$cmd" in
   newtask) /usr/bin/python3 "$SHARE/newtask.py" "$@" ;;
   standup) /usr/bin/python3 "$SHARE/standup.py" "$@" ;;
   time) /usr/bin/python3 "$SHARE/timelog.py" "$@" ;;
+  books) /usr/bin/python3 "$SHARE/books.py" "$@" ;;
   update)
     case "${1:-}" in
       --check) /usr/bin/python3 "$SHARE/update.py" check ;;

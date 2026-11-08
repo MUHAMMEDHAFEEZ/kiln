@@ -43,6 +43,8 @@ import iconkit as K  # noqa: E402
 import prayer as PR  # noqa: E402
 import accounts as ACC  # noqa: E402
 import timelog as TL  # noqa: E402
+import reader as RD  # noqa: E402  (the Books mode; draws with the helpers of this file)
+RD.bind(sys.modules[__name__])
 FONT = "Ubuntu Sans"
 
 # KILN_DEMO=<file.json> shows made-up projects, servers and programs instead of this computer's (for
@@ -63,6 +65,7 @@ DEFAULT_CONFIG = {
     "integrations": {"github": True, "lark": False, "claude_code": True},
     "now_playing": {"youtube_music_only": False},
     "terminal": {"project_commands": True, "system_input_method": False},
+    "books": {"dirs": ["~/Books"], "theme": "auto", "daily_goal_minutes": 20, "eye_break_minutes": 30},
     "modes": {"focus_mutes_notifications": True},
     "icons": {"recent_dot": True, "recent_hours": 48},
     "dock": {"cards": ["git", "board", "system", "day", "notes", "tests"], "position": "left"},
@@ -4229,8 +4232,8 @@ def scan_dev():
 
 
 PIN_FILE = f"{APP}/current-project.txt"
-MODE_W = 350                       # room kept at the right end of the work bar for the mode switcher
-MODES = ("overview", "coding", "focus", "tasks")
+MODE_W = 440                       # room kept at the right end of the work bar for the mode switcher
+MODES = ("overview", "coding", "focus", "tasks", "books")
 CMD_FILE = f"{CACHE}/cmd"          # `kiln mode ...` / `kiln test` drop their request here
 
 
@@ -4902,7 +4905,7 @@ class WorkBar(Gtk.DrawingArea):
     def draw_modes(self, cr, Wf):
         """Overview | Coding | Focus (| Tasks), at the right end of the bar."""
         labels = [("overview", "Overview"), ("coding", "Coding"), ("focus", "Focus")] + \
-                 ([("tasks", "Tasks")] if TASKS_MODE[0] else [])
+                 ([("tasks", "Tasks")] if TASKS_MODE[0] else []) + [("books", "Books")]
         widths = [self._measure(cr, lb, 12.5) + 22 for _k, lb in labels]
         x0 = Wf - 14 - sum(widths) - 4
         rrect(cr, x0 - 4, 9, sum(widths) + 8, 32, 16)
@@ -7022,6 +7025,10 @@ def main():
         bwin = make_window("Kiln Tasks", bigboard, g.x + 0, g.y + 0, 800, 600, resizable=True)
         bwin.show_all()                                   # (apply_mode hides it again unless this is the Tasks mode)
         wins["boardview"] = bwin
+    books = RD.BooksView(term)                            # the Books mode: your PDFs and a reader
+    kwin = make_window("Kiln Books", books, g.x, g.y, 800, 600, resizable=True)
+    kwin.show_all()                                       # (apply_mode hides it again unless this is the Books mode)
+    wins["booksview"] = kwin
 
     # Focus mode: a veil that dims the wallpaper, and the Pomodoro timer as a pill in the terminal header
     veil_area = Gtk.DrawingArea()
@@ -7106,9 +7113,15 @@ def main():
             place(wins["boardview"], bx, top, bw_, bh_)
             (tx, ty), (tw, th) = L["term"], ex["term0"]
             show = {"cards", "boardview", "bar"}
+        elif name == "books":
+            bw_, bh_ = ex["W"] - left - ex["right"], bar_y - gap - top
+            books.set_size(bw_, bh_)
+            place(wins["booksview"], left, top, bw_, bh_)
+            (tx, ty), (tw, th) = L["term"], ex["term0"]
+            show = {"booksview", "bar"}
         else:
             (tx, ty), (tw, th) = L["term"], ex["term0"]
-            show = set(wins) - {"boardview"}
+            show = set(wins) - {"boardview", "booksview"}
         term.set_size(tw, th)
         term.set_font_pt(pt)
         place(w2, tx, ty, tw, th)
@@ -7142,6 +7155,9 @@ def main():
                 pass
         if name in ("coding", "focus"):
             term.term.grab_focus()
+        elif name == "books":
+            books.area.grab_focus()
+            books.refresh()
         if time.time() - t_start > 0.4:                  # a slow switch leaves a line in the log (kiln logs)
             print(f"kiln: switching to {name} took {time.time() - t_start:.1f}s", flush=True)
 
@@ -7161,7 +7177,7 @@ def main():
             if words[0] == "mode":
                 want = words[1] if len(words) > 1 else "next"
                 if want == "next":
-                    avail = [m for m in MODES if m != "tasks" or bigboard]
+                    avail = [m for m in MODES if m != "tasks" or bigboard]      # (Books is always there)
                     want = avail[(avail.index(state["mode"]) + 1) % len(avail)] if state["mode"] in avail else "overview"
                 apply_mode(want)
             elif words[0] == "test" and qbar.proj:
