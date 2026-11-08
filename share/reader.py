@@ -1781,11 +1781,8 @@ class BooksView(Gtk.Overlay):
             self.area.queue_draw()
 
         def export():
-            path = os.path.splitext(e["path"])[0] + ".notes.md"
             try:
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(BK.export_markdown(e, self.store))
-                self.toast("Saved " + os.path.basename(path), 5)
+                self.toast("Saved " + os.path.basename(BK.write_export(e, self.store)), 5)
             except OSError as exc:
                 self.toast(f"Cannot save the notes ({exc.strerror})")
         item("Open", lambda: self.open_book(e))

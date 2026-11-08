@@ -318,6 +318,22 @@ class LibraryTests(Base):
         empty = B.export_markdown(next(e for e in self.entries if e["id"] == self.ids["Beta_book.pdf"]), self.store)
         self.assertIn("no highlights", empty)
 
+    def test_export_replaces_a_planted_link_instead_of_following_it(self):
+        bid = self.ids["alpha.pdf"]
+        self.store.add_note(bid, 0, "hello")
+        e = next(e for e in self.entries if e["id"] == bid)
+        target = f"{self.dir}/precious.txt"
+        with open(target, "w") as f:
+            f.write("keep me")
+        out = os.path.splitext(e["path"])[0] + ".notes.md"
+        os.symlink(target, out)
+        self.assertEqual(B.write_export(e, self.store), out)
+        self.assertFalse(os.path.islink(out))
+        self.assertIn("hello", open(out).read())
+        self.assertEqual(open(target).read(), "keep me")
+        self.assertEqual(stat.S_IMODE(os.stat(out).st_mode), 0o600)
+        self.assertEqual([n for n in os.listdir(os.path.dirname(out)) if n.endswith(".tmp")], [])
+
     def test_minutes_format(self):
         self.assertEqual([B.fmt_minutes(m) for m in (0.2, 42, 65)], ["<1m", "42m", "1h 05m"])
 

@@ -557,6 +557,25 @@ def export_markdown(entry, store):
     return "\n".join(out) + "\n"
 
 
+def write_export(entry, store):
+    """Save the highlights and notes next to the PDF as `<name>.notes.md` and return its path. The text goes to a new file
+    that cannot be a link, then replaces the old one, so a link planted under that name is replaced, never followed."""
+    path = os.path.splitext(entry["path"])[0] + ".notes.md"
+    tmp = f"{path}.{os.getpid()}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(export_markdown(entry, store))
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+    return path
+
+
 # ------------------------------------------------------------------ command line
 def main(argv):
     store, index = Store(), Index()
