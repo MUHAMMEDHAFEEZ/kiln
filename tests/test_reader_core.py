@@ -56,6 +56,39 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual(list(R.PageLayout([], 1.0).visible(0, 10)), [])
 
 
+class SpreadTests(unittest.TestCase):
+    def setUp(self):
+        self.lay = R.PageLayout([(100, 200)] * 6, 1.0, gap=10, spread=True)
+
+    def test_the_cover_is_alone_then_pages_go_in_pairs(self):
+        self.assertEqual(self.lay.rows, [[0], [1, 2], [3, 4], [5]])
+        self.assertEqual(self.lay.tops, [0.0, 210.0, 210.0, 420.0, 420.0, 630.0])
+        self.assertEqual(self.lay.total, 630 + 200)
+
+    def test_pages_sit_like_an_open_book(self):
+        lay = self.lay
+        self.assertEqual(lay.col_w, 210)
+        self.assertEqual(lay.xoff[0], 110)                       # the cover: the right-hand page
+        self.assertEqual((lay.xoff[1], lay.xoff[2]), (0, 110))   # left page, right page
+        self.assertEqual(lay.xoff[5], 0)                         # an odd last page: on the left
+        self.assertEqual(R.PageLayout([(100, 200)] * 3, 1.0).xoff, [0.0, 0.0, 0.0])
+
+    def test_finding_and_stepping_work_in_rows(self):
+        lay = self.lay
+        self.assertEqual([lay.page_at(y) for y in (0, 215, 400, 430, 5000)], [0, 1, 1, 3, 5])
+        self.assertEqual(list(lay.visible(205, 500)), [1, 2, 3, 4])
+        self.assertEqual([lay.step(p, 1) for p in (0, 1, 2, 5)], [1, 3, 3, 5])
+        self.assertEqual([lay.step(p, -1) for p in (0, 2, 3, 5)], [0, 0, 1, 3])
+        self.assertEqual(lay.row_pages(2), [1, 2])
+        self.assertEqual(lay.anchor(lay.position(3, 0.5)), (3, 0.5))
+
+    def test_a_row_is_as_tall_as_its_taller_page(self):
+        lay = R.PageLayout([(100, 200), (100, 200), (100, 300), (100, 200)], 1.0, gap=10, spread=True, cover_alone=False)
+        self.assertEqual(lay.rows, [[0, 1], [2, 3]])
+        self.assertEqual(lay.tops, [0.0, 0.0, 210.0, 210.0])
+        self.assertEqual(lay.total, 210 + 300)
+
+
 class TextTests(unittest.TestCase):
     def setUp(self):
         # "ab cd" on one line, "ef" on the next

@@ -122,6 +122,22 @@ class StoreTests(Base):
         self.store.set_zoom("new", None)
         self.assertIsNone(self.store.book("new")["zoom"])
 
+    def test_spread_is_a_yes_or_no_choice(self):
+        saved = B.CONF
+        self.addCleanup(lambda: setattr(B, "CONF", saved))
+        B.CONF = self.dir
+        self.assertFalse(B.config()["spread"])
+        with open(f"{self.dir}/config.json", "w") as f:
+            json.dump({"books": {"spread": "yes"}}, f)
+        self.assertFalse(B.config()["spread"])                                       # only true counts
+        with open(f"{self.dir}/config.json", "w") as f:
+            json.dump({"books": {"spread": True}}, f)
+        self.assertTrue(B.config()["spread"])
+        self.store.set_pref("spread", "maybe")
+        self.assertTrue(self.store.pref("spread", True))                              # a wrong value falls back
+        self.store.set_pref("spread", False)
+        self.assertFalse(self.store.pref("spread", True))
+
     def test_choices_made_in_the_reader_are_kept(self):
         self.store.set_pref("theme", "night")
         self.store.flush()

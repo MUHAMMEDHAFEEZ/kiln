@@ -230,6 +230,37 @@ class BooksViewTests(unittest.TestCase):
         self.assertFalse(v.fit)
         self.draw()
 
+    def test_two_pages_side_by_side_and_back(self):
+        v = self.open()
+        v.apply_zoom(0.8)
+        v.fit = False
+        v.go_page(2, remember=False)
+        self.pump_until(lambda: not v.anim, 5)
+        self.key("s")                                                  # on
+        self.addCleanup(lambda: v.spread and v.toggle_spread())
+        self.assertTrue(v.spread)
+        self.assertEqual(v.layout.rows[:3], [[0], [1, 2], [3, 4]])
+        self.assertEqual(v.layout.anchor(v.scroll_y + 24)[0], 1)       # page 3 is in the row that starts with page 2
+        self.settle()
+        x1, y1, w1, _h1 = v.page_box(1)
+        x2, y2, _w2, _h2 = v.page_box(2)
+        self.assertAlmostEqual(y1, y2)
+        self.assertAlmostEqual(x2 - (x1 + w1), v.layout.HGAP)
+        x0 = v.page_box(0)[0]
+        self.assertGreater(x0, x1)                                     # the cover is the right-hand page
+        self.assertEqual({v.page_under(x1 + 5, y1 + 150), v.page_under(x2 + 5, y2 + 150)}, {1, 2})
+        self.key("Right")
+        self.pump_until(lambda: not v.anim, 5)
+        self.assertEqual(v.cur_page(), 3)                              # a whole spread at a time
+        self.draw()
+        self.key("0")                                                  # fit the width: both pages fit
+        cx, cy, cw, ch = v.canvas()
+        self.assertLessEqual(v.layout.col_w, cw - 2 * 24 + 1)
+        self.key("s")                                                  # off again
+        self.assertFalse(v.spread)
+        self.assertEqual(v.layout.rows[:2], [[0], [1]])
+        self.assertFalse(self.BK.Store(self.BK.DATA_FILE).pref("spread", True))
+
     def test_contents_panel_and_jumping_from_it(self):
         v = self.open()
         self.key("t")

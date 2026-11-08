@@ -74,15 +74,40 @@ def paper_color(theme):
 
 # ------------------------------------------------------------------ pages in a column
 class PageLayout:
-    """Pages stacked in one column: `scale` pixels per point, `gap` pixels between pages."""
+    """Pages in rows going down: one page a row, or (spread) two side by side like an open book, with the cover on its
+    own at the right. `scale` is pixels per point. Every page has the top of its row (`tops`) and its distance from the
+    left edge of the column (`xoff`); `col_w` is the width of the whole column."""
+    HGAP = 10                                                 # between the two pages of a spread
 
-    def __init__(self, sizes, scale, gap=14):
-        self.sizes, self.scale, self.gap = sizes, scale, gap
-        self.tops, y = [], 0.0
-        for _w, h in sizes:
-            self.tops.append(y)
-            y += h * scale + gap
+    def __init__(self, sizes, scale, gap=14, spread=False, cover_alone=True):
+        self.sizes, self.scale, self.gap, self.spread = sizes, scale, gap, spread
+        n = len(sizes)
+        if spread:
+            rows = [[0]] if cover_alone and n else []
+            rows += [list(range(i, min(i + 2, n))) for i in range(len(rows), n, 2)]
+        else:
+            rows = [[i] for i in range(n)]
+        maxw = max((w for w, _h in sizes), default=0.0) * scale
+        self.rows, self.row_of, self.tops, self.xoff, self.row_tops, self.row_h = rows, [0] * n, [0.0] * n, [0.0] * n, [], []
+        y = 0.0
+        for r, pages in enumerate(rows):
+            self.row_tops.append(y)
+            rh = max(sizes[p][1] for p in pages) * scale
+            self.row_h.append(rh)
+            for k, p in enumerate(pages):
+                w = sizes[p][0] * scale
+                self.row_of[p], self.tops[p] = r, y
+                if not spread:
+                    self.xoff[p] = (maxw - w) / 2
+                elif len(pages) == 2:
+                    self.xoff[p] = maxw - w if k == 0 else maxw + self.HGAP
+                elif pages[0] == 0 and cover_alone:
+                    self.xoff[p] = maxw + self.HGAP               # the cover alone: the right-hand page of the first spread
+                else:
+                    self.xoff[p] = maxw - w                       # an odd last page: the left-hand one
+            y += rh + gap
         self.total = max(0.0, y - gap)
+        self.col_w = 2 * maxw + self.HGAP if spread else maxw
 
     def width(self, i):
         return self.sizes[i][0] * self.scale
@@ -90,20 +115,29 @@ class PageLayout:
     def height(self, i):
         return self.sizes[i][1] * self.scale
 
+    def _row_at(self, y):
+        return max(0, min(len(self.rows) - 1, bisect.bisect_right(self.row_tops, y) - 1))
+
     def page_at(self, y):
-        """The page that holds column position y (the nearest one in the gaps and outside)."""
-        if not self.tops:
-            return 0
-        return max(0, min(len(self.tops) - 1, bisect.bisect_right(self.tops, y) - 1))
+        """The page that holds column position y (the first one of a spread; the nearest row in gaps and outside)."""
+        return self.rows[self._row_at(y)][0] if self.rows else 0
 
     def visible(self, y0, y1):
-        if not self.tops:
+        if not self.rows:
             return range(0)
-        first = self.page_at(y0)
-        last = self.page_at(y1)
-        while first < last and self.tops[first] + self.height(first) < y0:
+        first, last = self._row_at(y0), self._row_at(y1)
+        while first < last and self.row_tops[first] + self.row_h[first] < y0:
             first += 1
-        return range(first, last + 1)
+        return range(self.rows[first][0], self.rows[last][-1] + 1)
+
+    def step(self, page, d):
+        """The first page of the row `d` rows after (or before) the row of `page`."""
+        if not self.rows:
+            return 0
+        return self.rows[max(0, min(len(self.rows) - 1, self.row_of[max(0, min(len(self.tops) - 1, page))] + d))][0]
+
+    def row_pages(self, page):
+        return self.rows[self.row_of[max(0, min(len(self.tops) - 1, page))]] if self.rows else []
 
     def position(self, page, frac):
         page = max(0, min(len(self.tops) - 1, page))

@@ -37,6 +37,7 @@ sudo apt install gir1.2-poppler-0.18
 | `b` | bookmark this page |
 | `n` | write a note on this page |
 | `d` | page colours: Auto (dark in the evening), Light, Sepia, Night |
+| `s` | two pages side by side (like an open book, the cover alone) or one page at a time |
 | Backspace | back to where you were before a link, a search hit or a jump |
 | Ctrl+C | copy the selected text |
 | Esc | clear the selection, close search or the panel, then go back to the library |

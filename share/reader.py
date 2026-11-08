@@ -39,6 +39,7 @@ STATUS_LABEL = (("all", "All"), ("reading", "Reading"), ("unread", "Unread"), ("
 SORT_LABEL = {"recent": "Recent", "title": "Title", "progress": "Progress"}
 ZOOM_STEP, MIN_SCALE, MAX_SCALE = 1.18, 0.25, 6.0
 FIT_MAX_W = 1000                            # "fit to width" never makes a page wider than this many pixels
+PROBE = 24                                  # the place in the book is taken this far below the top of the view (never in a gap)
 CARD_COVER_H = 196                          # a cover in the grid is 3:4
 
 
@@ -70,6 +71,7 @@ class BooksView(Gtk.Overlay):
         self.toast_text, self.toast_until = "", 0.0
         self.hits, self.hover = [], None
         self.theme_name = self.store.pref("theme", self.cfg["theme"])
+        self.spread = self.store.pref("spread", self.cfg["spread"])      # two pages side by side
         self.reset_reader()
 
         self.area = Gtk.DrawingArea()
@@ -619,7 +621,7 @@ class BooksView(Gtk.Overlay):
         self.tracker.stop()
         self.tracker.poke(time.time())
         self.area.grab_focus()
-        self.toast("/ search · g page · b bookmark · t contents · n note · d theme · Esc back", 6)
+        self.toast("/ search · g page · b bookmark · t contents · n note · d theme · s two pages · Esc back", 6)
         self.area.queue_draw()
 
     def got_info(self, bid, res):
@@ -640,8 +642,8 @@ class BooksView(Gtk.Overlay):
         z = b["zoom"]
         self.fit = z is None
         self.scale = max(MIN_SCALE, min(MAX_SCALE, self.fit_scale() if self.fit else float(z)))
-        self.layout = RC.PageLayout(res["sizes"], self.scale)
-        self.scroll_y = self.target_y = self.clamp_y(self.layout.position(b["page"], b["frac"]))
+        self.layout = self.new_layout(self.scale)
+        self.scroll_y = self.target_y = self.clamp_y(self.layout.position(b["page"], b["frac"]) - PROBE)
         self.area.queue_draw()
         return False
 
@@ -661,7 +663,7 @@ class BooksView(Gtk.Overlay):
         self.area.queue_draw()
 
     def save_position(self):
-        page, frac = self.layout.anchor(self.scroll_y)
+        page, frac = self.layout.anchor(self.scroll_y + PROBE)
         was = self.store.book(self.bid())["finished"]
         self.store.set_position(self.bid(), page, frac, pages=self.info["pages"])
         self.store.set_zoom(self.bid(), None if self.fit else self.scale)
@@ -674,10 +676,15 @@ class BooksView(Gtk.Overlay):
         cw = self.W - 28 - (PANEL_W + 10 if self.panel else 0)
         return 14, TOP, cw, self.H - TOP - BOTTOM - 6
 
+    def new_layout(self, scale):
+        return RC.PageLayout(self.info["sizes"], scale, spread=self.spread)
+
     def fit_scale(self):
+        """The zoom that fits the width: one page, or both pages of a spread."""
         _cx, _cy, cw, _ch = self.canvas()
         widest = max((w for w, _h in self.info["sizes"]), default=595)
-        return max(MIN_SCALE, min(MAX_SCALE, min(cw - 2 * PAD, FIT_MAX_W) / widest))        # (not huge on a wide screen)
+        one = (cw - 2 * PAD - (RC.PageLayout.HGAP if self.spread else 0)) / (2 if self.spread else 1)
+        return max(MIN_SCALE, min(MAX_SCALE, min(one, FIT_MAX_W) / widest))                 # (not huge on a wide screen)
 
     def clamp_y(self, y):
         _cx, _cy, _cw, ch = self.canvas()
@@ -685,8 +692,7 @@ class BooksView(Gtk.Overlay):
 
     def clamp_x(self):
         _cx, _cy, cw, _ch = self.canvas()
-        widest = max((w for w, _h in self.info["sizes"]), default=595) * self.scale + 2 * PAD
-        self.scroll_x = max(0.0, min(self.scroll_x, max(0.0, widest - cw)))
+        self.scroll_x = max(0.0, min(self.scroll_x, max(0.0, self.layout.col_w + 2 * PAD - cw)))
 
     def cur_page(self):
         if not self.layout:
@@ -709,7 +715,7 @@ class BooksView(Gtk.Overlay):
         if scale is None:
             scale = self.fit_scale()
         self.scale = max(MIN_SCALE, min(MAX_SCALE, scale))
-        self.layout = RC.PageLayout(self.info["sizes"], self.scale)
+        self.layout = self.new_layout(self.scale)
         self.scroll_y = self.target_y = self.clamp_y(self.layout.position(page, frac) - ay)
         self.clamp_x()
         self.pos_dirty = True
@@ -834,12 +840,9 @@ class BooksView(Gtk.Overlay):
         """(x, y, w, h) of page p in widget coordinates."""
         cx, cy, cw, _ch = self.canvas()
         pw, ph = self.layout.width(p), self.layout.height(p)
-        widest = max(w for w, _h in self.info["sizes"]) * self.scale
-        if widest + 2 * PAD <= cw:
-            x = cx + (cw - pw) / 2
-        else:
-            x = cx + PAD + (widest - pw) / 2 - self.scroll_x
-        return x, cy + self.layout.tops[p] - self.scroll_y, pw, ph
+        col = self.layout.col_w
+        x0 = cx + (cw - col) / 2 if col + 2 * PAD <= cw else cx + PAD - self.scroll_x
+        return x0 + self.layout.xoff[p], cy + self.layout.tops[p] - self.scroll_y, pw, ph
 
     def to_page(self, p, x, y):
         """Widget point -> point on page p in PDF points."""
@@ -979,6 +982,12 @@ class BooksView(Gtk.Overlay):
             cr.line_to(cx - 3, cy + 10)
             cr.line_to(cx + 3, cy + 5)
             cr.stroke()
+        elif kind == "spread":
+            for dx in (-9, 1):
+                K.rrect(cr, cx + dx, cy - 7, 8, 14, 2)
+                K.set_rgba(cr, c, 1)
+                cr.set_line_width(1.6)
+                cr.stroke()
         elif kind in ("search", "sun", "moon", "x"):
             K.glyph(cr, kind, cx - 9, cy - 9, 18, c)
         else:
@@ -1012,6 +1021,8 @@ class BooksView(Gtk.Overlay):
         x -= 34
         theme, _paper = self.sheet()
         self.icon_button(cr, ("theme",), x, "moon" if theme == "night" else "sun", on=theme != "light")
+        x -= 34
+        self.icon_button(cr, ("spread",), x, "spread", on=self.spread)
         x -= 12 + 34
         self.icon_button(cr, ("zoom", 1), x, "+")
         pct = f"{self.scale * 100:.0f}%" if not self.fit else "Fit"
@@ -1022,7 +1033,8 @@ class BooksView(Gtk.Overlay):
         self.icon_button(cr, ("zoom", -1), x, "−")
         x -= 12
         if self.layout:
-            label = f"{self.cur_page() + 1} / {self.info['pages']}"
+            shown = self.layout.row_pages(self.cur_page())
+            label = f"{shown[0] + 1}{'–' + str(shown[-1] + 1) if len(shown) > 1 else ''} / {self.info['pages']}"
             w = K.text(cr, label, 0, -100, 13, C["text"]) + 20
             x -= w
             self.region(("goto",), x, 14, w, 28)
@@ -1259,6 +1271,8 @@ class BooksView(Gtk.Overlay):
             self.open_entry("search", self.search["q"] if self.search else "")
         elif k == "theme":
             self.cycle_theme()
+        elif k == "spread":
+            self.toggle_spread()
         elif k == "zoom":
             if key[1] == 0:
                 self.zoom_fit()
@@ -1445,9 +1459,11 @@ class BooksView(Gtk.Overlay):
         elif key == Gdk.KEY_End:
             self.go_page(self.info["pages"] - 1, remember=False)
         elif key in (Gdk.KEY_Right, Gdk.KEY_l):
-            self.go_page(self.target_page() + 1, remember=False)
+            self.go_page(self.layout.step(self.target_page(), 1), remember=False)
         elif key in (Gdk.KEY_Left, Gdk.KEY_h):
-            self.go_page(self.target_page() - 1, remember=False)
+            self.go_page(self.layout.step(self.target_page(), -1), remember=False)
+        elif ch == "s":
+            self.toggle_spread()
         elif ch in ("+", "="):
             self.zoom_by(ZOOM_STEP, chh / 2)
         elif ch in ("-", "_"):
@@ -1561,6 +1577,22 @@ class BooksView(Gtk.Overlay):
             added = self.store.toggle_bookmark(self.bid(), p)
             self.store.flush()
             self.toast(f"Bookmarked page {p + 1}" if added else f"Bookmark removed from page {p + 1}", 2)
+
+    def toggle_spread(self):
+        """Two pages side by side (like an open book) or one page at a time; the place in the book stays."""
+        if not self.layout:
+            return
+        self.spread = not self.spread
+        self.store.set_pref("spread", self.spread)
+        self.store.flush()
+        page, frac = self.layout.anchor(self.scroll_y + PROBE)
+        self.scale = max(MIN_SCALE, min(MAX_SCALE, self.fit_scale() if self.fit else self.scale))
+        self.layout = self.new_layout(self.scale)
+        self.scroll_y = self.target_y = self.clamp_y(self.layout.position(page, frac) - PROBE)
+        self.clamp_x()
+        self.pos_dirty = True
+        self.toast("Two pages side by side" if self.spread else "One page at a time", 2)
+        self.area.queue_draw()
 
     def cycle_theme(self):
         order = list(BK.THEMES)

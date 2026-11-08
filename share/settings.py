@@ -40,7 +40,7 @@ DEFAULTS = {
     "now_playing": {"youtube_music_only": False},
     "lock_screen": {"widgets": True, "brightness": 0.72, "blur": 0},
     "terminal": {"project_commands": True, "system_input_method": False},
-    "books": {"dirs": ["~/Books"], "theme": "auto", "daily_goal_minutes": 20, "eye_break_minutes": 30},
+    "books": {"dirs": ["~/Books"], "theme": "auto", "daily_goal_minutes": 20, "eye_break_minutes": 30, "spread": False},
     "modes": {"focus_mutes_notifications": True, "focus_dim": True},
     "icons": {"recent_dot": True, "recent_hours": 48},
     "dock": {"cards": ["git", "board", "system", "day", "notes", "tests"], "position": "left"},
@@ -539,6 +539,9 @@ class Settings(Gtk.Window):
         theme.connect("changed", lambda c: self.set("books.theme", c.get_active_id()))
         box.pack_start(self.row("Page colours", theme, "Press d in the reader to change it. Sepia and Night are gentler "
                                 "on the eyes in a dim room."), False, False, 0)
+        box.pack_start(self.switch("books.spread", "Two pages side by side",
+                                   "Like an open book, with the cover on its own. Press s in the reader to switch at any time; "
+                                   "what you pick there is remembered."), False, False, 0)
         goal = Gtk.SpinButton.new_with_range(5, 300, 5)
         goal.set_value(int(books.get("daily_goal_minutes", 20) or 20))
         goal.connect("value-changed", lambda s: self.set("books.daily_goal_minutes", int(s.get_value())))

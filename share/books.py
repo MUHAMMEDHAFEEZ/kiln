@@ -29,7 +29,7 @@ COVERS = f"{CACHE}/covers"
 
 THEMES = ("auto", "light", "sepia", "night")
 COLORS = ("yellow", "green", "pink", "blue")                 # highlight colours
-DEFAULTS = dict(dirs=["~/Books"], theme="auto", daily_goal_minutes=20, eye_break_minutes=30)
+DEFAULTS = dict(dirs=["~/Books"], theme="auto", daily_goal_minutes=20, eye_break_minutes=30, spread=False)
 MAX_BOOKS, MAX_RECTS, MAX_TEXT, KEEP_DAYS = 3000, 120, 3000, 400
 DAY_MIN_SECS = 60                    # a day counts for the streak from one minute of reading
 PAGE_SEEN_SECS = 4                   # a page counts as read after being in view this long
@@ -51,6 +51,7 @@ def config():
     out["dirs"] = [os.path.abspath(os.path.expanduser(str(d))) for d in dirs if d] or [f"{HOME}/Books"]
     if out["theme"] not in THEMES:
         out["theme"] = "auto"
+    out["spread"] = out["spread"] is True
     for key, lo, hi in (("daily_goal_minutes", 1, 600), ("eye_break_minutes", 0, 240)):
         try:
             out[key] = max(lo, min(hi, int(out[key])))
@@ -192,7 +193,8 @@ class Store:
     def pref(self, key, default=None):
         """A choice made in the reader itself (the page theme)."""
         v = self.prefs.get(key, default)
-        return v if (key != "theme" or v in THEMES) else default
+        ok = {"theme": v in THEMES, "spread": isinstance(v, bool)}.get(key, True)
+        return v if ok else default
 
     def set_pref(self, key, value):
         if self.prefs.get(key) != value:

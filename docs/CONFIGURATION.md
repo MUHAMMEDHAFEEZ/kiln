@@ -25,7 +25,7 @@ All settings live in **`~/.config/kiln/config.json`**. Open it with `kiln config
   "lock_screen": { "widgets": true, "brightness": 0.72, "blur": 0 },
 
   "terminal": { "project_commands": true, "system_input_method": false },
-  "books": { "dirs": ["~/Books"], "theme": "auto", "daily_goal_minutes": 20, "eye_break_minutes": 30 },
+  "books": { "dirs": ["~/Books"], "theme": "auto", "daily_goal_minutes": 20, "eye_break_minutes": 30, "spread": false },
   "modes": { "focus_mutes_notifications": true, "focus_dim": true },
   "icons": { "recent_dot": true, "recent_hours": 48 },
   "dock": { "cards": ["git", "system", "day", "notes", "tests"] },
@@ -92,6 +92,7 @@ The Books mode ([BOOKS.md](BOOKS.md)). Also in Settings → Desktop → Books.
 |---|---|---|
 | `books.dirs` | `["~/Books"]` | Folders with your PDFs (and the folders inside them). New books you add are copied into the first one. |
 | `books.theme` | `"auto"` | Page colours: `auto` (dark from 19:00 to 06:00), `light`, `sepia` or `night`. The `d` key in the reader changes it and remembers the choice. |
+| `books.spread` | `false` | Show two pages side by side, like an open book (the cover on its own). The `s` key or the button in the reader's top bar switches it and remembers the choice. |
 | `books.daily_goal_minutes` | `20` | The goal the ring in the library fills towards. |
 | `books.eye_break_minutes` | `30` | Reminder to rest your eyes after this many minutes of reading without a pause; `0` turns it off. |
 | `notifications.books` | `true` | The eye-break reminder also as a desktop notification. |
