@@ -28,10 +28,11 @@ INDEX_FILE = f"{CACHE}/books-index.json"
 COVERS = f"{CACHE}/covers"
 
 THEMES = ("auto", "light", "sepia", "night")
+VIEWS = ("single", "spread", "book")                        # one page scrolling, two pages scrolling, an open book with page turns
 COVER_MODES = ("auto", "pdf", "designed")                   # auto: the first page of the book, a drawn cover only when that page is blank; pdf: always the first page; designed: a cover drawn by Kiln for every book
 COVER_VERSION = 2                                           # changes when the designed covers change, so they are made again
 COLORS = ("yellow", "green", "pink", "blue")                 # highlight colours
-DEFAULTS = dict(dirs=["~/Books"], theme="auto", daily_goal_minutes=20, eye_break_minutes=30, spread=False, covers="auto")
+DEFAULTS = dict(dirs=["~/Books"], theme="auto", daily_goal_minutes=20, eye_break_minutes=30, view="book", covers="auto")
 MAX_BOOKS, MAX_RECTS, MAX_TEXT, KEEP_DAYS = 3000, 120, 3000, 400
 DAY_MIN_SECS = 60                    # a day counts for the streak from one minute of reading
 PAGE_SEEN_SECS = 4                   # a page counts as read after being in view this long
@@ -53,7 +54,10 @@ def config():
     out["dirs"] = [os.path.abspath(os.path.expanduser(str(d))) for d in dirs if d] or [f"{HOME}/Books"]
     if out["theme"] not in THEMES:
         out["theme"] = "auto"
-    out["spread"] = out["spread"] is True
+    view = user.get("view") if isinstance(user, dict) else None
+    if view not in VIEWS:                                    # (an older config had books.spread: true)
+        view = "spread" if isinstance(user, dict) and user.get("spread") is True else DEFAULTS["view"]
+    out["view"] = view
     if out["covers"] not in COVER_MODES:
         out["covers"] = "auto"
     for key, lo, hi in (("daily_goal_minutes", 1, 600), ("eye_break_minutes", 0, 240)):
@@ -266,7 +270,7 @@ class Store:
     def pref(self, key, default=None):
         """A choice made in the reader itself (the page theme)."""
         v = self.prefs.get(key, default)
-        ok = {"theme": v in THEMES, "spread": isinstance(v, bool)}.get(key, True)
+        ok = {"theme": v in THEMES, "view": v in VIEWS}.get(key, True)
         return v if ok else default
 
     def set_pref(self, key, value):

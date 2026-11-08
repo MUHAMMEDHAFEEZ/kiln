@@ -29,18 +29,23 @@ sudo apt install gir1.2-poppler-0.18
 
 ## The reader
 
+The default view is the **open book**: two pages side by side with the cover on its own, one spread at a time, and the page
+turns like paper. Turn with `→` `←` (or Space, Page Down/Up, the mouse wheel), click the left or right fifth of the page area,
+or drag a page edge with the mouse: the page follows the pointer and turns on if you take it far enough, or falls back.
+Text can be selected and highlighted as usual. Press `s` for the two scrolling views, which also zoom.
+
 | Key | |
 |---|---|
-| Scroll, Space / Page Down, Page Up, ↑ ↓ (or `j` `k`) | move through the book (continuous scrolling) |
-| ← → (or `h` `l`), Home, End | previous or next page, first or last page |
-| `+` `-` `0`, Ctrl + wheel | zoom in, out, fit to the width |
+| Scroll, Space / Page Down, Page Up, ↑ ↓ (or `j` `k`) | move through the book (continuous scrolling); in the open book they turn the page |
+| ← → (or `h` `l`), Home, End | previous or next page (spread), first or last page |
+| `+` `-` `0`, Ctrl + wheel | zoom in, out, fit to the width (scrolling views) |
 | `/` or Ctrl+F, Enter, Shift+Enter (or `]`) | search the whole book, next and previous match |
 | `g` | go to a page |
 | `t` / `m` | contents / bookmarks panel (`Esc` closes it) |
 | `b` | bookmark this page |
 | `n` | write a note on this page |
 | `d` | page colours: Auto (dark in the evening), Light, Sepia, Night |
-| `s` | two pages side by side (like an open book, the cover alone) or one page at a time |
+| `s` | the view: the **open book** (two pages, turning), two pages scrolling, one page scrolling |
 | Backspace | back to where you were before a link, a search hit or a jump |
 | Ctrl+C | copy the selected text |
 | Esc | clear the selection, close search or the panel, then go back to the library |

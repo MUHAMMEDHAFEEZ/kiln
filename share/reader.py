@@ -71,7 +71,7 @@ class BooksView(Gtk.Overlay):
         self.toast_text, self.toast_until = "", 0.0
         self.hits, self.hover = [], None
         self.theme_name = self.store.pref("theme", self.cfg["theme"])
-        self.spread = self.store.pref("spread", self.cfg["spread"])      # two pages side by side
+        self.set_view(self.store.pref("view", self.cfg["view"]), save=False)     # single, spread or book
         self.reset_reader()
 
         self.area = Gtk.DrawingArea()
@@ -644,6 +644,7 @@ class BooksView(Gtk.Overlay):
         self.panel, self.panel_tab, self.panel_y = None, "toc", 0.0
         self.loading = self.failed = ""
         self.anim = self.pos_dirty = self.seeking = False
+        self.row, self.flip, self.queued, self.wheel, self.last_turn = 0, None, None, 0.0, 0.0       # the open book (book view)
         self.ppp = 1.0
         self.last_theme = None
 
@@ -661,7 +662,7 @@ class BooksView(Gtk.Overlay):
         self.tracker.stop()
         self.tracker.poke(time.time())
         self.area.grab_focus()
-        self.toast("/ search · g page · b bookmark · t contents · n note · d theme · s two pages · Esc back", 6)
+        self.toast("/ search · g page · b bookmark · t contents · n note · d theme · s view · Esc back", 6)
         self.area.queue_draw()
 
     def got_info(self, bid, res):
@@ -680,10 +681,14 @@ class BooksView(Gtk.Overlay):
         if res["title"] and not self.book.get("known"):
             self.book["title"] = BK.A.clean_text(res["title"], 160)
         z = b["zoom"]
-        self.fit = z is None
+        self.fit = z is None or self.paged
         self.scale = max(MIN_SCALE, min(MAX_SCALE, self.fit_scale() if self.fit else float(z)))
         self.layout = self.new_layout(self.scale)
-        self.scroll_y = self.target_y = self.clamp_y(self.layout.position(b["page"], b["frac"]) - PROBE)
+        if self.paged:
+            self.row = self.layout.row_of[min(b["page"], len(self.layout.row_of) - 1)]
+            self.book_sync()
+        else:
+            self.scroll_y = self.target_y = self.clamp_y(self.layout.position(b["page"], b["frac"]) - PROBE)
         self.area.queue_draw()
         return False
 
@@ -703,10 +708,14 @@ class BooksView(Gtk.Overlay):
         self.area.queue_draw()
 
     def save_position(self):
-        page, frac = self.layout.anchor(self.scroll_y + PROBE)
+        if self.paged:
+            page, frac = self.layout.rows[self.row][0], 0.0
+        else:
+            page, frac = self.layout.anchor(self.scroll_y + PROBE)
         was = self.store.book(self.bid())["finished"]
         self.store.set_position(self.bid(), page, frac, pages=self.info["pages"])
-        self.store.set_zoom(self.bid(), None if self.fit else self.scale)
+        if not self.paged:
+            self.store.set_zoom(self.bid(), None if self.fit else self.scale)
         if not was and self.store.book(self.bid())["finished"]:
             self.toast("You finished this book")
         self.pos_dirty = False
@@ -716,15 +725,34 @@ class BooksView(Gtk.Overlay):
         cw = self.W - 28 - (PANEL_W + 10 if self.panel else 0)
         return 14, TOP, cw, self.H - TOP - BOTTOM - 6
 
+    def set_view(self, view, save=True):
+        """single: one page, scrolling; spread: two pages, scrolling; book: two pages, one spread at a time, turning."""
+        self.view = view if view in BK.VIEWS else "single"
+        self.spread, self.paged = self.view != "single", self.view == "book"
+        if save:
+            self.store.set_pref("view", self.view)
+            self.store.flush()
+
     def new_layout(self, scale):
-        return RC.PageLayout(self.info["sizes"], scale, spread=self.spread)
+        return RC.PageLayout(self.info["sizes"], scale, spread=self.spread, hgap=2 if self.paged else None)
 
     def fit_scale(self):
-        """The zoom that fits the width: one page, or both pages of a spread."""
-        _cx, _cy, cw, _ch = self.canvas()
+        """The zoom that fits the width: one page, or both pages of a spread; in the book view the whole spread fits."""
+        _cx, _cy, cw, ch = self.canvas()
         widest = max((w for w, _h in self.info["sizes"]), default=595)
-        one = (cw - 2 * PAD - (RC.PageLayout.HGAP if self.spread else 0)) / (2 if self.spread else 1)
-        return max(MIN_SCALE, min(MAX_SCALE, min(one, FIT_MAX_W) / widest))                 # (not huge on a wide screen)
+        tallest = max((h for _w, h in self.info["sizes"]), default=842)
+        gap = 2 if self.paged else RC.PageLayout.HGAP
+        one = (cw - 2 * PAD - (gap if self.spread else 0)) / (2 if self.spread else 1)
+        scale = min(one, FIT_MAX_W) / widest                                                # (not huge on a wide screen)
+        if self.paged:
+            scale = min(scale, (ch - 40) / tallest)
+        return max(MIN_SCALE, min(MAX_SCALE, scale))
+
+    def book_sync(self):
+        """In the book view the spread of `self.row` sits in the middle of the page area."""
+        _cx, _cy, _cw, ch = self.canvas()
+        self.scroll_y = self.target_y = self.layout.row_tops[self.row] - (ch - self.layout.row_h[self.row]) / 2
+        self.scroll_x = 0.0
 
     def clamp_y(self, y):
         _cx, _cy, _cw, ch = self.canvas()
@@ -737,6 +765,8 @@ class BooksView(Gtk.Overlay):
     def cur_page(self):
         if not self.layout:
             return 0
+        if self.paged:
+            return self.layout.rows[self.row][0]
         _cx, _cy, _cw, ch = self.canvas()
         return self.layout.page_at(self.scroll_y + ch * 0.33)
 
@@ -744,6 +774,8 @@ class BooksView(Gtk.Overlay):
         """The page we are scrolling to (the page in view once the scroll animation has finished)."""
         if not self.layout:
             return 0
+        if self.paged:
+            return self.layout.rows[self.flip["b"] if self.flip else self.row][0]
         return self.layout.page_at(self.target_y + self.canvas()[3] * 0.33)
 
     def apply_zoom(self, scale, anchor=None, keep=True):
@@ -751,6 +783,16 @@ class BooksView(Gtk.Overlay):
         if not self.info:
             return
         ay = anchor or 0
+        if self.paged:                                             # the book view always fits: just refit and keep the spread
+            page = self.layout.rows[self.row][0]
+            self.fit, self.flip = True, None
+            self.scale = self.fit_scale()
+            self.layout = self.new_layout(self.scale)
+            self.row = self.layout.row_of[page]
+            self.book_sync()
+            self.pos_dirty = True
+            self.area.queue_draw()
+            return
         page, frac = self.layout.anchor(self.scroll_y + ay)
         if scale is None:
             scale = self.fit_scale()
@@ -762,7 +804,9 @@ class BooksView(Gtk.Overlay):
         self.area.queue_draw()
 
     def zoom_by(self, factor, anchor=None):
-        if self.layout:
+        if self.layout and self.paged:
+            self.toast("The book view fits the page. Press s for a scrolling view to zoom.", 3)
+        elif self.layout:
             self.fit = False
             self.apply_zoom(self.scale * factor, anchor)
 
@@ -780,7 +824,7 @@ class BooksView(Gtk.Overlay):
         if smooth and not K.LIGHT:
             if not self.anim:
                 self.anim = True
-                self.area.add_tick_callback(self.step)
+                GLib.timeout_add(16, self.step)             # a timer, not the frame clock: that one stops when the window is covered
         else:
             self.scroll_y = self.target_y
             self.area.queue_draw()
@@ -788,7 +832,7 @@ class BooksView(Gtk.Overlay):
     def scroll_to(self, y, smooth=True):
         self.scroll_by(self.clamp_y(y) - self.target_y, smooth)
 
-    def step(self, _w, _clock):
+    def step(self, *_):
         d = self.target_y - self.scroll_y
         if abs(d) < 0.6 or not self.layout:
             self.scroll_y, self.anim = self.target_y, False
@@ -799,18 +843,96 @@ class BooksView(Gtk.Overlay):
         return True
 
     def go_page(self, p, remember=True):
-        if self.layout:
-            p = max(0, min(self.info["pages"] - 1, p))
+        if not self.layout:
+            return
+        p = max(0, min(self.info["pages"] - 1, p))
+        if self.paged:
+            r = self.layout.row_of[p]
+            here = self.flip["b"] if self.flip else self.row
             if remember:
-                self.jump_back = self.scroll_y
-            self.scroll_to(self.layout.tops[p] - 6)
+                self.jump_back = float(self.row)
+            if r == here:
+                return
+            if abs(r - here) == 1 and not self.flip:
+                self.turn(r - here)
+            else:                                                  # far away: no page-turning, just the new spread
+                self.flip, self.queued, self.row = None, None, r
+                self.book_sync()
+                self.pos_dirty = True
+                self.area.queue_draw()
+            return
+        if remember:
+            self.jump_back = self.scroll_y
+        self.scroll_to(self.layout.tops[p] - 6)
+
+    # ---- turning pages (the book view)
+    TURN_SECS = 0.5
+
+    def turn(self, d):
+        """Turn to the next (1) or the previous (-1) spread; a turn asked for during a turn waits for it."""
+        if not (self.paged and self.layout):
+            return
+        if self.flip:
+            self.queued = d
+            return
+        b = self.row + d
+        if not 0 <= b < len(self.layout.rows):
+            self.toast("This is the last page" if d > 0 else "This is the first page", 1.5)
+            return
+        self.tracker.poke(time.time())
+        self.flip = dict(dir=d, a=self.row, b=b, t=0.0, drag=False, frm=0.0, to=1.0, start=time.time(), ticking=False)
+        self.run_flip(1.0)
+
+    def run_flip(self, to):
+        """Let the turning page go on to `to` (1: finish turning, 0: fall back), over the rest of the time it needs."""
+        fl = self.flip
+        fl.update(drag=False, frm=fl["t"], to=to, start=time.time())
+        if K.LIGHT or abs(to - fl["t"]) < 0.01:
+            fl["t"] = to
+            self.flip_done()
+            return
+        if not fl["ticking"]:
+            fl["ticking"] = True
+            GLib.timeout_add(16, self.step_flip)
+
+    def step_flip(self, *_):
+        fl = self.flip
+        if not fl or fl["drag"]:
+            if fl:
+                fl["ticking"] = False
+            return False
+        span = self.TURN_SECS * max(0.15, abs(fl["to"] - fl["frm"]))
+        p = (time.time() - fl["start"]) / span
+        fl["t"] = fl["frm"] + (fl["to"] - fl["frm"]) * RC.ease(p)
+        self.area.queue_draw()
+        if p >= 1.0:
+            fl["t"], fl["ticking"] = fl["to"], False
+            self.flip_done()
+            return False
+        return True
+
+    def flip_done(self):
+        fl, self.flip = self.flip, None
+        if fl["to"] >= 1.0:
+            self.row = fl["b"]
+            self.book_sync()
+            self.pos_dirty = True
+        q, self.queued = self.queued, None
+        self.area.queue_draw()
+        if q:
+            self.turn(q)
 
     # ------------------------------------------------------------------ the reader: pages, text, links
     def want_pages(self, vis):
         theme, _paper = self.sheet()
         self.ppp = round(self.scale * self.dpr(), 2)
         n = self.info["pages"]
-        for p in list(vis) + [q for q in (vis.start - 1, vis.stop, vis.stop + 1) if 0 <= q < n]:
+        if self.paged:                                             # the spreads before and after are ready for turning
+            rows = self.layout.rows
+            ahead = [p for r in (self.row - 1, self.row + 1) if 0 <= r < len(rows) for p in rows[r]]
+        else:
+            ahead = [q for q in (vis.start - 1, vis.stop, vis.stop + 1) if 0 <= q < n]
+        for p in list(vis) + ahead:
             key = (p, self.ppp, theme)
             if key in self.cache:
                 self.cache.move_to_end(key)
@@ -890,7 +1012,7 @@ class BooksView(Gtk.Overlay):
         return (x - px) / self.scale, (y - py) / self.scale
 
     def page_under(self, x, y):
-        if not self.layout:
+        if not self.layout or self.flip:
             return None
         cx, cy, cw, ch = self.canvas()
         if not (cx <= x < cx + cw and cy <= y < cy + ch):
@@ -915,12 +1037,16 @@ class BooksView(Gtk.Overlay):
             cr.save()
             K.rrect(cr, cx, cy, cw, ch, 12)
             cr.clip()
-            vis = self.layout.visible(self.scroll_y, self.scroll_y + ch)
-            self.want_pages(vis)
-            for p in vis:
-                self.draw_page(cr, p, theme, paper)
+            if self.paged:
+                self.draw_book(cr, theme, paper)
+            else:
+                vis = self.layout.visible(self.scroll_y, self.scroll_y + ch)
+                self.want_pages(vis)
+                for p in vis:
+                    self.draw_page(cr, p, theme, paper)
             cr.restore()
-            self.draw_scrollbar(cr, cx + cw - 8, cy + 6, ch - 12)
+            if not self.paged:
+                self.draw_scrollbar(cr, cx + cw - 8, cy + 6, ch - 12)
         self.draw_topbar(cr)
         if self.layout:
             self.draw_bottombar(cr)
@@ -933,6 +1059,100 @@ class BooksView(Gtk.Overlay):
         if theme != self.last_theme:
             self.last_theme = theme
 
+    # ---- the open book: a spread, and a page turning
+    def draw_spine(self, cr, x, y, h):
+        g = cairo.LinearGradient(x - 16, 0, x + 16, 0)
+        g.add_color_stop_rgba(0, 0, 0, 0, 0)
+        g.add_color_stop_rgba(0.5, 0, 0, 0, 0.26)
+        g.add_color_stop_rgba(1, 0, 0, 0, 0)
+        cr.set_source(g)
+        cr.rectangle(x - 16, y, 32, h)
+        cr.fill()
+
+    def draw_book(self, cr, theme, paper):
+        L = self.layout
+        cx, cy, cw, _ch = self.canvas()
+        cur = L.rows[self.row]
+        self.want_pages(range(cur[0], cur[-1] + 1))
+        spine = cx + cw / 2
+        top, rh = cy + L.row_tops[self.row] - self.scroll_y, L.row_h[self.row]
+        fl = self.flip
+        if not fl:
+            for p in cur:
+                self.draw_page(cr, p, theme, paper)
+            self.draw_spine(cr, spine, top, rh)
+            return
+        half, d, t = L.hgap / 2, fl["dir"], fl["t"]
+        left_a, right_a = L.slots(fl["a"])
+        left_b, right_b = L.slots(fl["b"])
+        base_left, base_right, front, back, fside = (left_a, right_b, right_a, left_b, 1) if d > 0 else \
+            (left_b, right_a, left_a, right_b, -1)
+        rect = {}
+
+        def put(p, side):                                            # a page of the spread that stays, in its slot
+            if p is not None:
+                w, h = L.width(p), L.height(p)
+                rect[side] = (spine + half if side > 0 else spine - half - w, top, w, h)
+                self.paint_page(cr, p, *rect[side], theme, paper)
+        put(base_left, -1)
+        put(base_right, 1)
+        face, wf = RC.sheet_state(t)
+        page = front if face == "front" else back
+        side = fside if face == "front" else -fside
+        ref = front if front is not None else back
+        if ref is None:
+            return
+        full, h = L.width(ref), L.height(ref)
+        free = spine + side * full * wf
+        sh = math.sin(math.pi * t)
+        if side in rect:                                             # the shadow of the turning page on the one under it
+            x, y, w, hh = rect[side]
+            cr.save()
+            cr.rectangle(x, y, w, hh)
+            cr.clip()
+            g = cairo.LinearGradient(free, 0, free + side * 46, 0)
+            g.add_color_stop_rgba(0, 0, 0, 0, 0.38 * sh)
+            g.add_color_stop_rgba(1, 0, 0, 0, 0)
+            cr.set_source(g)
+            cr.rectangle(min(free, free + side * 46), y, 46, hh)
+            cr.fill()
+            cr.restore()
+        self.draw_sheet(cr, self.page_surface(page, theme) if page is not None else None, paper, spine + side * half, side,
+                        full, wf, top, h, t)
+        self.draw_spine(cr, spine, top, rh)
+
+    def draw_sheet(self, cr, surf, paper, sx, side, full, wf, y, h, t):
+        """The turning page as 24 narrow strips, the ones farther from the spine a little taller: it looks lifted."""
+        n, sh = 24, math.sin(math.pi * t)
+        for i in range(n):
+            u0, u1 = i / n, (i + 1) / n
+            xa, xb = sx + side * u0 * full * wf, sx + side * u1 * full * wf
+            x0, x1 = min(xa, xb), max(xa, xb)
+            if x1 - x0 < 0.25:                                       # edge-on (the middle of the turn): nothing to see
+                continue
+            hh = h * (1 + 0.05 * sh * (u0 + u1) / 2)
+            yy = y - (hh - h) / 2
+            cr.save()
+            cr.rectangle(x0 - 0.3, yy, x1 - x0 + 0.6, hh)
+            cr.clip()
+            if surf:
+                su0 = u0 if side > 0 else 1 - u1
+                cr.translate(x0, yy)
+                cr.scale((x1 - x0) / (surf.get_width() * (u1 - u0)), hh / surf.get_height())
+                cr.set_source_surface(surf, -surf.get_width() * su0, 0)
+                cr.paint()
+            else:
+                K.set_rgba(cr, paper, 1)
+                cr.paint()
+            cr.restore()
+        free = sx + side * full * wf
+        g = cairo.LinearGradient(sx, 0, free, 0)                     # darker towards the free edge, as the page turns away
+        g.add_color_stop_rgba(0, 0, 0, 0, 0.04 * sh)
+        g.add_color_stop_rgba(1, 0, 0, 0, 0.34 * sh)
+        cr.set_source(g)
+        cr.rectangle(min(sx, free), y - 0.05 * h * sh / 2, abs(free - sx), h * (1 + 0.05 * sh))
+        cr.fill()
+
     def draw_scrollbar(self, cr, x, y, h):
         if self.layout.total > h:
             frac = self.scroll_y / max(1.0, self.layout.total - h)
@@ -941,8 +1161,8 @@ class BooksView(Gtk.Overlay):
             K.set_rgba(cr, K.C["ink"], 0.25)
             cr.fill()
 
-    def draw_page(self, cr, p, theme, paper):
-        x, y, w, h = self.page_box(p)
+    def paint_page(self, cr, p, x, y, w, h, theme, paper):
+        """Page p with its shadow, at (x, y) and w x h, without highlights (a placeholder until it is drawn)."""
         cr.rectangle(x + 1, y + 3, w, h)
         cr.set_source_rgba(0, 0, 0, 0.35)
         cr.fill()
@@ -959,6 +1179,10 @@ class BooksView(Gtk.Overlay):
             cr.rectangle(x, y, w, h)
             cr.fill()
             K.text(cr, "page not readable" if p in self.bad_pages else "…", x + w / 2, y + h / 2, 14, "888888", align="c")
+
+    def draw_page(self, cr, p, theme, paper):
+        x, y, w, h = self.page_box(p)
+        self.paint_page(cr, p, x, y, w, h, theme, paper)
         k = self.scale
         night = theme == "night"
         for hl in self.store.highlights(self.bid(), p):                                # saved highlights
@@ -1054,7 +1278,8 @@ class BooksView(Gtk.Overlay):
         x -= 34
         self.icon_button(cr, ("panel", "toc"), x, "list", on=self.panel is not None)
         x -= 34
-        marked = self.layout and self.cur_page() in self.store.bookmarks(self.bid())
+        marks = self.store.bookmarks(self.bid())
+        marked = self.layout and any(p in marks for p in self.layout.row_pages(self.cur_page()))
         self.icon_button(cr, ("bookmark",), x, "star", on=bool(marked))
         x -= 34
         self.icon_button(cr, ("find",), x, "search", on=self.search is not None)
@@ -1087,7 +1312,11 @@ class BooksView(Gtk.Overlay):
         y = self.H - BOTTOM + 2
         p = self.cur_page()
         n = self.info["pages"]
-        frac = min(1.0, (self.layout.anchor(self.scroll_y + self.canvas()[3] * 0.33)[0] + self.layout.anchor(self.scroll_y + self.canvas()[3] * 0.33)[1]) / n)
+        if self.paged:
+            frac = min(1.0, (self.layout.rows[self.row][-1] + 1) / n)
+        else:
+            anchor = self.layout.anchor(self.scroll_y + self.canvas()[3] * 0.33)
+            frac = min(1.0, (anchor[0] + anchor[1]) / n)
         K.text(cr, f"page {p + 1} of {n}  ·  {frac * 100:.0f}%", 28, y + 17, 12, C["dim"])
         left = self.store.minutes_left(self.bid())
         spent = self.store.book_secs(self.bid())
@@ -1312,7 +1541,7 @@ class BooksView(Gtk.Overlay):
         elif k == "theme":
             self.cycle_theme()
         elif k == "spread":
-            self.toggle_spread()
+            self.cycle_view()
         elif k == "zoom":
             if key[1] == 0:
                 self.zoom_fit()
@@ -1363,8 +1592,16 @@ class BooksView(Gtk.Overlay):
         return False
 
     def begin_press(self, ev):
-        p = self.page_under(ev.x, ev.y)
         self.press = None
+        if self.paged and self.layout:
+            if self.flip:
+                return
+            cx, _cy, cw, _ch = self.canvas()
+            zone = -1 if ev.x < cx + 0.2 * cw else 1 if ev.x > cx + 0.8 * cw else 0
+            if zone:                                                  # the outer fifths of the page area turn the page
+                self.press = dict(zone=zone, x=ev.x, y=ev.y, moved=False)
+                return
+        p = self.page_under(ev.x, ev.y)
         if p is None:
             self.sel = self.hl = None
             self.area.queue_draw()
@@ -1382,6 +1619,19 @@ class BooksView(Gtk.Overlay):
             self.seek(ev.x)
             return True
         pr = self.press
+        if pr and pr.get("zone"):                                    # dragging a page edge turns it with the pointer
+            dx = ev.x - pr["x"]
+            if not pr["moved"] and abs(dx) > 8:
+                pr["moved"] = True
+            if pr["moved"] and (dx < 0) == (pr["zone"] > 0):
+                d = pr["zone"]
+                if not self.flip and 0 <= self.row + d < len(self.layout.rows):
+                    self.flip = dict(dir=d, a=self.row, b=self.row + d, t=0.0, drag=True, frm=0.0, to=1.0, start=time.time(),
+                                     ticking=False)
+                if self.flip and self.flip["drag"]:
+                    self.flip["t"] = min(1.0, abs(dx) / (self.canvas()[2] * 0.45))
+                    self.area.queue_draw()
+            return True
         if pr and (ev.state & Gdk.ModifierType.BUTTON1_MASK):
             if not pr["moved"] and max(abs(ev.x - pr["x"]), abs(ev.y - pr["y"])) > 4:
                 pr["moved"] = True
@@ -1412,6 +1662,14 @@ class BooksView(Gtk.Overlay):
         pr, self.press = self.press, None
         if not pr or ev.button != 1:
             return False
+        if pr.get("zone"):
+            fl = self.flip
+            if fl and fl["drag"]:
+                self.run_flip(1.0 if fl["t"] > 0.35 else 0.0)        # far enough: the page turns on, else it falls back
+            elif not pr["moved"]:
+                self.turn(pr["zone"])
+            self.area.queue_draw()
+            return True
         if not pr["moved"]:
             if pr["link"]:
                 self.follow_link(pr["link"])
@@ -1436,6 +1694,13 @@ class BooksView(Gtk.Overlay):
         elif self.panel and getattr(self, "panel_rect", None) and self.panel_rect[0] <= ev.x:
             top, bottom = self.panel_view
             self.panel_y = max(0.0, min(self.panel_y + dy, max(0.0, self.panel_total - (bottom - top))))
+        elif self.layout and self.paged:                              # one turn per notch of the wheel
+            if (self.wheel > 0) != ((dy or dx) > 0):
+                self.wheel = 0.0
+            self.wheel += dy or dx
+            if abs(self.wheel) >= 40 and time.time() - self.last_turn > 0.25 and not self.flip:
+                self.turn(1 if self.wheel > 0 else -1)
+                self.last_turn, self.wheel = time.time(), 0.0
         elif self.layout:
             if ev.state & Gdk.ModifierType.CONTROL_MASK:
                 if dy:
@@ -1486,6 +1751,10 @@ class BooksView(Gtk.Overlay):
                 self.toggle_panel(self.panel_tab)
             else:
                 self.close_book()
+        elif self.paged and (key in (Gdk.KEY_Right, Gdk.KEY_Page_Down, Gdk.KEY_Down, Gdk.KEY_j, Gdk.KEY_l, Gdk.KEY_Left,
+                                     Gdk.KEY_Page_Up, Gdk.KEY_Up, Gdk.KEY_k, Gdk.KEY_h) or key == Gdk.KEY_space):
+            back = key in (Gdk.KEY_Left, Gdk.KEY_Page_Up, Gdk.KEY_Up, Gdk.KEY_k, Gdk.KEY_h) or (key == Gdk.KEY_space and shift)
+            self.turn(-1 if back else 1)
         elif key in (Gdk.KEY_Down, Gdk.KEY_j):
             self.scroll_by(70)
         elif key in (Gdk.KEY_Up, Gdk.KEY_k):
@@ -1503,7 +1772,7 @@ class BooksView(Gtk.Overlay):
         elif key in (Gdk.KEY_Left, Gdk.KEY_h):
             self.go_page(self.layout.step(self.target_page(), -1), remember=False)
         elif ch == "s":
-            self.toggle_spread()
+            self.cycle_view()
         elif ch in ("+", "="):
             self.zoom_by(ZOOM_STEP, chh / 2)
         elif ch in ("-", "_"):
@@ -1514,7 +1783,10 @@ class BooksView(Gtk.Overlay):
             self.toolbar(("tb", "copy"))
         elif key == Gdk.KEY_BackSpace and self.jump_back is not None:
             y, self.jump_back = self.jump_back, None
-            self.scroll_to(y)
+            if self.paged:
+                self.go_page(self.layout.rows[max(0, min(len(self.layout.rows) - 1, int(y)))][0], remember=False)
+            else:
+                self.scroll_to(y)
         elif ch == "/":
             self.open_entry("search", self.search["q"] if self.search else "")
         elif ch == "g":
@@ -1613,25 +1885,38 @@ class BooksView(Gtk.Overlay):
 
     def toggle_bookmark(self):
         if self.layout:
-            p = self.cur_page()
-            added = self.store.toggle_bookmark(self.bid(), p)
+            pages = self.layout.row_pages(self.cur_page())            # (a spread is one place: both pages go together)
+            marked = [p for p in pages if p in self.store.bookmarks(self.bid())]
+            for p in (marked or pages[:1]):
+                self.store.toggle_bookmark(self.bid(), p)
             self.store.flush()
-            self.toast(f"Bookmarked page {p + 1}" if added else f"Bookmark removed from page {p + 1}", 2)
+            where = f"page {pages[0] + 1}" + (f"–{pages[-1] + 1}" if len(pages) > 1 else "")
+            self.toast(f"Bookmark removed from {where}" if marked else f"Bookmarked {where}", 2)
 
-    def toggle_spread(self):
-        """Two pages side by side (like an open book) or one page at a time; the place in the book stays."""
+    def cycle_view(self):
+        """One page scrolling, two pages scrolling, the open book (turning pages): the place in the book stays."""
         if not self.layout:
             return
-        self.spread = not self.spread
-        self.store.set_pref("spread", self.spread)
-        self.store.flush()
-        page, frac = self.layout.anchor(self.scroll_y + PROBE)
+        if self.paged:
+            page, frac = self.layout.rows[self.row][0], 0.0
+        else:
+            page, frac = self.layout.anchor(self.scroll_y + PROBE)
+        order = list(BK.VIEWS)
+        self.set_view(order[(order.index(self.view) + 1) % len(order)])
+        self.flip = self.queued = None
+        if self.paged:
+            self.fit = True
         self.scale = max(MIN_SCALE, min(MAX_SCALE, self.fit_scale() if self.fit else self.scale))
         self.layout = self.new_layout(self.scale)
-        self.scroll_y = self.target_y = self.clamp_y(self.layout.position(page, frac) - PROBE)
-        self.clamp_x()
+        if self.paged:
+            self.row = self.layout.row_of[page]
+            self.book_sync()
+        else:
+            self.scroll_y = self.target_y = self.clamp_y(self.layout.position(page, frac) - PROBE)
+            self.clamp_x()
         self.pos_dirty = True
-        self.toast("Two pages side by side" if self.spread else "One page at a time", 2)
+        self.toast({"single": "One page, scrolling", "spread": "Two pages, scrolling",
+                    "book": "Book view: turn pages with ← → or the page edges"}[self.view], 2.5)
         self.area.queue_draw()
 
     def cycle_theme(self):
@@ -1830,6 +2115,9 @@ class BooksView(Gtk.Overlay):
         p, i = key
         box = self.search["hits"][p][i]
         _cx, _cy, _cw, ch = self.canvas()
+        if self.paged:
+            self.go_page(p)
+            return
         self.jump_back = self.scroll_y
         self.scroll_to(self.layout.tops[p] + box[1] * self.scale - ch * 0.3)
 

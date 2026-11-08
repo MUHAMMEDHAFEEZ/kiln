@@ -9,7 +9,8 @@
   `kiln mode books`, Settings → Desktop → Books. See `docs/BOOKS.md`.
 * Books: **Set cover image…** in a book's right-click menu uses a picture of your choice as its cover.
 * Books: a book's cover is its own first page; Kiln draws a cover (colours and picture by subject, title and author) only when that page is blank, or for every book with `books.covers: designed`.
-* Books: **two pages side by side** (`s`, a button in the reader, `books.spread`), like an open book with the cover on its own.
+* Books: an **open-book view** (the default): two pages side by side with the cover on its own, one spread at a time, with a
+  page-turning animation (arrow keys, wheel, click or drag the page edge). `s` cycles it with two scrolling views; `books.view`.
 * **Lark Base**: a new service and a **Tasks board** card with a tab per list (projects, your own tasks); what you are
   working on also shows in Today. See `docs/ACCOUNTS.md`.
 * The board shows a status bar and filter in red (not started), yellow (ongoing) and green (completed). You can add a task

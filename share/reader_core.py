@@ -7,6 +7,7 @@ Coordinates are PDF points with the origin at the top left of the page, which is
 """
 import bisect
 import itertools
+import math
 import os
 import queue
 import threading
@@ -79,8 +80,9 @@ class PageLayout:
     left edge of the column (`xoff`); `col_w` is the width of the whole column."""
     HGAP = 10                                                 # between the two pages of a spread
 
-    def __init__(self, sizes, scale, gap=14, spread=False, cover_alone=True):
-        self.sizes, self.scale, self.gap, self.spread = sizes, scale, gap, spread
+    def __init__(self, sizes, scale, gap=14, spread=False, cover_alone=True, hgap=None):
+        self.sizes, self.scale, self.gap, self.spread, self.cover_alone = sizes, scale, gap, spread, cover_alone
+        self.hgap = self.HGAP if hgap is None else hgap
         n = len(sizes)
         if spread:
             rows = [[0]] if cover_alone and n else []
@@ -100,14 +102,14 @@ class PageLayout:
                 if not spread:
                     self.xoff[p] = (maxw - w) / 2
                 elif len(pages) == 2:
-                    self.xoff[p] = maxw - w if k == 0 else maxw + self.HGAP
+                    self.xoff[p] = maxw - w if k == 0 else maxw + self.hgap
                 elif pages[0] == 0 and cover_alone:
-                    self.xoff[p] = maxw + self.HGAP               # the cover alone: the right-hand page of the first spread
+                    self.xoff[p] = maxw + self.hgap               # the cover alone: the right-hand page of the first spread
                 else:
                     self.xoff[p] = maxw - w                       # an odd last page: the left-hand one
             y += rh + gap
         self.total = max(0.0, y - gap)
-        self.col_w = 2 * maxw + self.HGAP if spread else maxw
+        self.col_w = 2 * maxw + self.hgap if spread else maxw
 
     def width(self, i):
         return self.sizes[i][0] * self.scale
@@ -136,6 +138,13 @@ class PageLayout:
             return 0
         return self.rows[max(0, min(len(self.rows) - 1, self.row_of[max(0, min(len(self.tops) - 1, page))] + d))][0]
 
+    def slots(self, row):
+        """(left page, right page) of a row of an open book; one of them is None for the cover and for an odd last page."""
+        pages = self.rows[row]
+        if len(pages) == 2:
+            return pages[0], pages[1]
+        return (None, pages[0]) if pages[0] == 0 and self.cover_alone and self.spread else (pages[0], None)
+
     def row_pages(self, page):
         return self.rows[self.row_of[max(0, min(len(self.tops) - 1, page))]] if self.rows else []
 
@@ -148,6 +157,21 @@ class PageLayout:
         p = self.page_at(y)
         h = self.height(p) or 1
         return p, max(0.0, min(1.0, (y - self.tops[p]) / h))
+
+
+# ------------------------------------------------------------------ turning a page
+def ease(t):
+    """Slow start, slow end (smoothstep) for a page turning."""
+    t = max(0.0, min(1.0, t))
+    return t * t * (3 - 2 * t)
+
+
+def sheet_state(t):
+    """A page turning about the spine at progress t (0: flat on one side, 1: flat on the other): which face shows and how
+    wide it looks, from 1 (flat) to 0 (edge-on at t = 0.5)."""
+    t = max(0.0, min(1.0, t))
+    c = math.cos(math.pi * t)
+    return ("front", c) if t < 0.5 else ("back", -c)
 
 
 # ------------------------------------------------------------------ choosing text

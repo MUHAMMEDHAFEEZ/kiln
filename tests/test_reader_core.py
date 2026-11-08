@@ -89,6 +89,33 @@ class SpreadTests(unittest.TestCase):
         self.assertEqual(lay.total, 210 + 300)
 
 
+class BookTurnTests(unittest.TestCase):
+    def test_slots_say_which_page_is_left_and_which_is_right(self):
+        lay = R.PageLayout([(100, 200)] * 6, 1.0, spread=True, hgap=2)
+        self.assertEqual([lay.slots(r) for r in range(4)], [(None, 0), (1, 2), (3, 4), (5, None)])
+        self.assertEqual(lay.hgap, 2)
+        self.assertEqual(lay.col_w, 202)
+        self.assertEqual((lay.xoff[1], lay.xoff[2]), (0, 102))
+        self.assertEqual(R.PageLayout([(100, 200)] * 2, 1.0, spread=True, cover_alone=False).slots(0), (0, 1))
+        self.assertEqual(R.PageLayout([(100, 200)] * 3, 1.0).slots(1), (1, None))      # one page a row: no right page
+
+    def test_a_turning_page_shows_its_front_then_its_back_and_is_edge_on_in_the_middle(self):
+        self.assertEqual(R.sheet_state(0.0), ("front", 1.0))
+        self.assertEqual(R.sheet_state(1.0), ("back", 1.0))
+        face, w = R.sheet_state(0.5)
+        self.assertEqual(face, "back")
+        self.assertAlmostEqual(w, 0.0, places=6)
+        self.assertEqual(R.sheet_state(0.25)[0], "front")
+        self.assertAlmostEqual(R.sheet_state(0.25)[1], R.sheet_state(0.75)[1])         # symmetrical
+        self.assertEqual(R.sheet_state(-3), ("front", 1.0))                            # out of range stays in range
+
+    def test_easing_starts_and_ends_slowly(self):
+        self.assertEqual((R.ease(0), R.ease(1), R.ease(0.5)), (0, 1, 0.5))
+        self.assertLess(R.ease(0.1), 0.1)
+        self.assertGreater(R.ease(0.9), 0.9)
+        self.assertEqual((R.ease(-1), R.ease(2)), (0, 1))
+
+
 class TextTests(unittest.TestCase):
     def setUp(self):
         # "ab cd" on one line, "ef" on the next

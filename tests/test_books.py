@@ -178,21 +178,27 @@ class StoreTests(Base):
         self.store.set_zoom("new", None)
         self.assertIsNone(self.store.book("new")["zoom"])
 
-    def test_spread_is_a_yes_or_no_choice(self):
+    def test_the_reading_view_is_checked_and_an_older_config_still_works(self):
         saved = B.CONF
         self.addCleanup(lambda: setattr(B, "CONF", saved))
         B.CONF = self.dir
-        self.assertFalse(B.config()["spread"])
-        with open(f"{self.dir}/config.json", "w") as f:
-            json.dump({"books": {"spread": "yes"}}, f)
-        self.assertFalse(B.config()["spread"])                                       # only true counts
-        with open(f"{self.dir}/config.json", "w") as f:
-            json.dump({"books": {"spread": True}}, f)
-        self.assertTrue(B.config()["spread"])
-        self.store.set_pref("spread", "maybe")
-        self.assertTrue(self.store.pref("spread", True))                              # a wrong value falls back
-        self.store.set_pref("spread", False)
-        self.assertFalse(self.store.pref("spread", True))
+
+        def view(books):
+            with open(f"{self.dir}/config.json", "w") as f:
+                json.dump({"books": books}, f)
+            return B.config()["view"]
+        self.assertEqual(B.config()["view"], "book")                                  # no config at all: the open book
+        self.assertEqual(view({"view": "single"}), "single")
+        self.assertEqual(view({"view": "spread"}), "spread")
+        self.assertEqual(view({"view": "carousel"}), "book")                           # not a view: the default
+        self.assertEqual(view({"spread": True}), "spread")                             # the older switch still means something
+        self.assertEqual(view({"spread": False}), "book")
+        self.assertEqual(view({"spread": "yes"}), "book")
+        self.assertEqual(view({"spread": True, "view": "single"}), "single")           # the new setting wins
+        self.store.set_pref("view", "spread")
+        self.assertEqual(self.store.pref("view", "book"), "spread")
+        self.store.set_pref("view", "cube")
+        self.assertEqual(self.store.pref("view", "book"), "book")                      # a wrong value falls back
 
     def test_choices_made_in_the_reader_are_kept(self):
         self.store.set_pref("theme", "night")
