@@ -91,6 +91,32 @@ class FilesTests(Base):
         self.assertEqual(B.split_title("Some (x)"), ("Some (x)", "", ""))                 # too short to be an author
         self.assertEqual(B.split_title("Bad\x1b[31m title")[0], "Bad[31m title")
 
+    def test_a_chosen_cover_picture_is_kept_checked_and_replaced(self):
+        saved = B.CONF
+        self.addCleanup(lambda: setattr(B, "CONF", saved))
+        B.CONF = self.dir
+        png = f"{self.dir}/c.png"
+        with open(png, "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n" + b"0" * 20)
+        jpg = f"{self.dir}/c.jpg"
+        with open(jpg, "wb") as f:
+            f.write(b"\xff\xd8\xff\xe0" + b"0" * 20)
+        self.assertIsNone(B.custom_cover("abc"))
+        out = B.set_custom_cover("abc", png)
+        self.assertEqual((B.custom_cover("abc"), stat.S_IMODE(os.stat(out).st_mode)), (out, 0o600))
+        out2 = B.set_custom_cover("abc", jpg)                                          # a new picture replaces the old one
+        self.assertEqual((B.custom_cover("abc"), out2.endswith(".jpg"), os.path.exists(out)), (out2, True, False))
+        fake = f"{self.dir}/fake.png"
+        with open(fake, "w") as f:
+            f.write("this is text, not a picture")
+        with self.assertRaises(ValueError):
+            B.set_custom_cover("abc", fake)
+        with self.assertRaises(ValueError):
+            B.set_custom_cover("abc", f"{self.dir}/missing.png")
+        self.assertEqual(B.custom_cover("abc"), out2)                                  # a refused file changes nothing
+        B.clear_custom_cover("abc")
+        self.assertIsNone(B.custom_cover("abc"))
+
     def test_a_book_is_sorted_into_a_topic(self):
         t = B.cover_topic
         self.assertEqual([t("Dive into Deep Learning"), t("Reinforcement Learning"), t("Mathematics for Machine Learning")], ["ai"] * 3)

@@ -105,6 +105,48 @@ def cover_file(bid, mode="auto"):
     return f"{COVERS}/{bid}.{mode}.v{COVER_VERSION}.png"
 
 
+IMAGE_MAGIC = ((b"\x89PNG\r\n\x1a\n", ".png"), (b"\xff\xd8\xff", ".jpg"), (b"RIFF", ".webp"))
+MAX_IMAGE = 20 * 1024 * 1024
+
+
+def custom_cover(bid):
+    """The cover image you chose for a book (kept in ~/.config/kiln/covers), or None."""
+    for _magic, ext in IMAGE_MAGIC:
+        path = f"{CONF}/covers/{bid}{ext}"
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def set_custom_cover(bid, src):
+    """Use the image file `src` as the cover of a book. It must really be a PNG, JPEG or WebP picture of a sane size;
+    returns the saved path or raises ValueError."""
+    try:
+        if os.path.getsize(src) > MAX_IMAGE:
+            raise ValueError("that picture is too big (over 20 MB)")
+        with open(src, "rb") as f:
+            head = f.read(16)
+    except OSError as exc:
+        raise ValueError(f"cannot read it ({exc.strerror})") from exc
+    ext = next((e for magic, e in IMAGE_MAGIC if head.startswith(magic) and (e != ".webp" or head[8:12] == b"WEBP")), None)
+    if not ext:
+        raise ValueError("that is not a PNG, JPEG or WebP picture")
+    os.makedirs(f"{CONF}/covers", mode=0o700, exist_ok=True)
+    clear_custom_cover(bid)
+    dest = f"{CONF}/covers/{bid}{ext}"
+    shutil.copyfile(src, dest)
+    os.chmod(dest, 0o600)
+    return dest
+
+
+def clear_custom_cover(bid):
+    for _magic, ext in IMAGE_MAGIC:
+        try:
+            os.remove(f"{CONF}/covers/{bid}{ext}")
+        except OSError:
+            pass
+
+
 def split_title(title, author=""):
     """('Reinforcement Learning', 'An Introduction', 'Sutton and Barto') from 'Reinforcement Learning - An Introduction
     (Sutton and Barto)': what a cover shows as title, subtitle and author."""

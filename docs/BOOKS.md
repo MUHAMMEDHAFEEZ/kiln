@@ -23,7 +23,8 @@ sudo apt install gir1.2-poppler-0.18
   7 days. A day counts for the streak from one minute of reading.
 * Filter by All / Reading / Unread / Finished, sort by Recent / Title / Progress, and type to filter by title or author
   (`/` or Ctrl+F).
-* Right-click a book: open, mark finished or unread, export its highlights and notes as Markdown (a `.notes.md` file next
+* Right-click a book: open, **set a cover image** (a PNG, JPEG or WebP picture, kept in `~/.config/kiln/covers`; "Use the
+  automatic cover" undoes it), mark finished or unread, export its highlights and notes as Markdown (a `.notes.md` file next
   to the PDF) or show it in the folder. A book is marked finished when you reach 97% of it.
 
 ## The reader

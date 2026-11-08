@@ -154,6 +154,28 @@ class BooksViewTests(unittest.TestCase):
         self.draw()
         self.assertTrue(any(k[0] == "open" for _r, k in v.hits))
 
+    def test_a_chosen_cover_picture_replaces_the_automatic_one(self):
+        import cairo
+        v, e = self.view, self.entry("Test Book")
+        pic = f"{self.tmp.name}/mine.png"
+        s = cairo.ImageSurface(cairo.FORMAT_RGB24, 60, 80)
+        cr = cairo.Context(s)
+        cr.set_source_rgb(1, 0, 0)
+        cr.paint()
+        s.write_to_png(pic)
+        self.addCleanup(lambda: v.reset_cover(e))
+        automatic = v.cover(e)
+        v.set_cover(e, pic)
+        mine = v.cover(e)
+        self.assertEqual((mine.get_width(), mine.get_height()), (60, 80))
+        self.assertIsNot(mine, automatic)
+        self.draw()
+        v.set_cover(e, f"{self.tmp.name}/missing.png")                  # a bad file is refused with a message
+        self.assertIn("Cannot use it", v.toast_text)
+        self.assertEqual(v.cover(e).get_width(), 60)
+        v.reset_cover(e)
+        self.assertNotEqual(v.cover(e).get_width(), 60)
+
     def test_filter_status_and_sort_buttons(self):
         v = self.view
         self.draw()

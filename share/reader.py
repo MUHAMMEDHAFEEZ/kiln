@@ -18,7 +18,7 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, GLib, Gtk  # noqa: E402
+from gi.repository import Gdk, GdkPixbuf, GLib, Gtk  # noqa: E402
 
 import books as BK  # noqa: E402
 import reader_core as RC  # noqa: E402
@@ -253,12 +253,17 @@ class BooksView(Gtk.Overlay):
         """The cover as a surface, or None while there is none yet."""
         if e["id"] in self.covers:
             return self.covers[e["id"]]
-        path = BK.cover_file(e["id"], self.cfg["covers"])
+        mine = BK.custom_cover(e["id"])                                   # a picture you chose beats the automatic cover
+        path = mine or BK.cover_file(e["id"], self.cfg["covers"])
         surf = None
         if os.path.exists(path) and self.loaded_now < 4:
             try:
-                surf = cairo.ImageSurface.create_from_png(path)
-            except (cairo.Error, OSError):
+                if path.endswith(".png"):
+                    surf = cairo.ImageSurface.create_from_png(path)
+                else:
+                    pix = GdkPixbuf.Pixbuf.new_from_file_at_size(path, 480, 640)
+                    surf = Gdk.cairo_surface_create_from_pixbuf(pix, 1, None)
+            except (cairo.Error, OSError, GLib.Error):
                 surf = False
             self.loaded_now += 1
             self.covers[e["id"]] = surf
@@ -293,6 +298,38 @@ class BooksView(Gtk.Overlay):
             self.add_files(paths)
         else:
             self.toast("Drop PDF files here to add them")
+
+    def choose_cover(self, e):
+        dlg = Gtk.FileChooserDialog(title=f"Cover for {e['title']}", transient_for=self.get_toplevel(),
+                                    action=Gtk.FileChooserAction.OPEN)
+        dlg.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Use this picture", Gtk.ResponseType.OK)
+        flt = Gtk.FileFilter()
+        flt.set_name("Pictures")
+        for pat in ("*.png", "*.jpg", "*.jpeg", "*.webp", "*.PNG", "*.JPG", "*.JPEG"):
+            flt.add_pattern(pat)
+        dlg.add_filter(flt)
+
+        def done(d, resp):
+            path = d.get_filename() if resp == Gtk.ResponseType.OK else None
+            d.destroy()
+            if path:
+                self.set_cover(e, path)
+        dlg.connect("response", done)
+        dlg.show()
+
+    def set_cover(self, e, path):
+        try:
+            BK.set_custom_cover(e["id"], path)
+            self.covers.pop(e["id"], None)
+            self.toast("Cover changed", 2.5)
+        except ValueError as exc:
+            self.toast(f"Cannot use it: {exc}", 5)
+        self.area.queue_draw()
+
+    def reset_cover(self, e):
+        BK.clear_custom_cover(e["id"])
+        self.covers.pop(e["id"], None)
+        self.area.queue_draw()
 
     def choose_files(self):
         dlg = Gtk.FileChooserDialog(title="Add books", transient_for=self.get_toplevel(), action=Gtk.FileChooserAction.OPEN)
@@ -1824,6 +1861,9 @@ class BooksView(Gtk.Overlay):
         item("Mark as unread" if e["status"] == "finished" else "Mark as finished", lambda: mark(e["status"] != "finished"))
         if e["marks"]:
             item("Export highlights and notes", export)
+        item("Set cover image…", lambda: self.choose_cover(e))
+        if BK.custom_cover(bid):
+            item("Use the automatic cover", lambda: self.reset_cover(e))
         item("Show in folder", lambda: K.run(["xdg-open", os.path.dirname(e["path"])]))
         menu.show_all()
         menu.popup_at_pointer(ev)
