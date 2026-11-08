@@ -509,8 +509,8 @@ def design_cover(title, subtitle="", author="", topic="other", seed=0):
     return surf
 
 
-def has_own_cover(surface):
-    """True when a rendered first page looks like a real cover (pictures or colour) and not a plain title page."""
+def is_blank(surface, limit=0.001):
+    """True when a rendered page has (almost) nothing on it: less than 0.1% of it is not white."""
     surface.flush()
     data, stride = surface.get_data(), surface.get_stride()
     w, h = surface.get_width(), surface.get_height()
@@ -520,14 +520,15 @@ def has_own_cover(surface):
         for x in range(0, w, 2):
             o = row + x * 4
             total += 1
-            if min(data[o], data[o + 1], data[o + 2]) < 215:
+            if min(data[o], data[o + 1], data[o + 2]) < 235:
                 dark += 1
-    return total > 0 and dark / total > 0.12
+    return total == 0 or dark / total < limit
 
 
-def job_cover(path, dest, width=300, mode="designed", fallback_title=""):
-    """Title, author and page count of a book, and its cover saved as a PNG for the library. `mode`: designed (made for
-    every book), auto (its own first page when that is a real cover) or pdf (always its first page)."""
+def job_cover(path, dest, width=300, mode="auto", fallback_title=""):
+    """Title, author and page count of a book, and its cover saved as a PNG for the library. `mode`: auto (the first page
+    of the book; a cover drawn by Kiln only when that page is blank), pdf (always the first page) or designed (a drawn
+    cover for every book)."""
     doc = Poppler.Document.new_from_file(GLib.filename_to_uri(path, None), None)
     n = doc.get_n_pages()
     title, author = doc.get_title() or "", doc.get_author() or ""
@@ -544,7 +545,7 @@ def job_cover(path, dest, width=300, mode="designed", fallback_title=""):
             cr.paint()
             cr.scale(k, k)
             p.render(cr)
-            if mode == "auto" and not has_own_cover(surf):
+            if mode == "auto" and is_blank(surf):
                 surf = None
         if surf is None:
             import books as BK

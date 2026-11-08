@@ -14,8 +14,8 @@ sudo apt install gir1.2-poppler-0.18
 
 * Put PDFs in `~/Books` (or the folder in Settings → Desktop → Books). Folders inside it count too. You can also press
   **Add book**, or drop PDF files on the mode; they are copied into the books folder and never replace a file.
-* Every book gets a cover that Kiln draws from its title, author and subject, so a plain title page never leaves a blank cover.
-  Set `books.covers` to `auto` to use a book's own cover when it has one, or `pdf` for the first page. Titles, authors and page
+* A book's cover is the first page of its PDF. When that page is blank, Kiln draws a cover from the title, author and subject
+  instead (`books.covers`: `pdf` always uses the first page, `designed` draws one for every book). Titles, authors and page
   counts come from the PDFs; all of it is cached in `~/.cache/kiln`.
 * **Continue reading** shows the books you started, newest first, with the page you stopped at, the percentage and about
   how long is left at your own pace with that book.

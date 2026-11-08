@@ -102,13 +102,13 @@ class FilesTests(Base):
         saved = B.CONF
         self.addCleanup(lambda: setattr(B, "CONF", saved))
         B.CONF = self.dir
-        self.assertEqual(B.config()["covers"], "designed")
-        with open(f"{self.dir}/config.json", "w") as f:
-            json.dump({"books": {"covers": "auto"}}, f)
         self.assertEqual(B.config()["covers"], "auto")
         with open(f"{self.dir}/config.json", "w") as f:
-            json.dump({"books": {"covers": "fancy"}}, f)
+            json.dump({"books": {"covers": "designed"}}, f)
         self.assertEqual(B.config()["covers"], "designed")
+        with open(f"{self.dir}/config.json", "w") as f:
+            json.dump({"books": {"covers": "fancy"}}, f)
+        self.assertEqual(B.config()["covers"], "auto")
         self.assertNotEqual(B.cover_file("abc", "auto"), B.cover_file("abc", "designed"))
 
     def test_index_remembers_a_file_until_it_changes(self):

@@ -147,16 +147,16 @@ class CoverTests(unittest.TestCase):
         self.assertLess(size, 36)
         self.assertGreaterEqual(size, 18)
 
-    def test_a_real_cover_is_told_from_a_page_of_text(self):
+    def test_a_blank_page_is_told_from_one_with_a_title(self):
         s = cairo.ImageSurface(cairo.FORMAT_RGB24, 120, 160)
         cr = cairo.Context(s)
         cr.set_source_rgb(1, 1, 1)
         cr.paint()
-        self.assertFalse(R.has_own_cover(s))
-        cr.set_source_rgb(0.1, 0.3, 0.5)
-        cr.rectangle(0, 0, 120, 100)
+        self.assertTrue(R.is_blank(s))
+        cr.set_source_rgb(0.1, 0.1, 0.1)
+        cr.rectangle(10, 20, 100, 6)                                                       # a line of title: 3% of the page
         cr.fill()
-        self.assertTrue(R.has_own_cover(s))
+        self.assertFalse(R.is_blank(s))
 
 
 class ThemeTests(unittest.TestCase):
@@ -276,8 +276,24 @@ class PopplerTests(unittest.TestCase):
         designed, pdf, auto = make("designed"), make("pdf"), make("auto")
         self.assertEqual((designed.get_width(), designed.get_height()), (300, 400))
         self.assertEqual((pdf.get_width(), pdf.get_height()), (300, 450))               # the page itself: 400 x 600 points
-        self.assertFalse(R.has_own_cover(pdf))                                           # a page of text is not a cover
-        self.assertEqual((auto.get_width(), auto.get_height()), (300, 400))              # so auto draws one
+        self.assertEqual((auto.get_width(), auto.get_height()), (300, 450))              # auto: the book's own first page
+        self.assertFalse(R.is_blank(auto))
+
+    def test_a_blank_first_page_gets_a_drawn_cover_in_auto_mode(self):
+        blank = f"{self.tmp.name}/blank.pdf"
+        s = cairo.PDFSurface(blank, 400, 600)
+        s.set_metadata(cairo.PDFMetadata.TITLE, "A Blank Start")
+        cr = cairo.Context(s)
+        cr.show_page()
+        cr.show_page()
+        s.finish()
+        dest = f"{self.tmp.name}/blank-auto.png"
+        R.job_cover(blank, dest, mode="auto", fallback_title="A Blank Start")
+        c = cairo.ImageSurface.create_from_png(dest)
+        self.assertEqual((c.get_width(), c.get_height()), (300, 400))                   # the drawn cover, not the empty page
+        self.assertFalse(R.is_blank(c))
+        R.job_cover(blank, dest, mode="pdf")
+        self.assertTrue(R.is_blank(cairo.ImageSurface.create_from_png(dest)))             # pdf mode keeps the blank page
 
 
     def test_a_broken_file_is_reported_not_raised_in_the_window(self):

@@ -28,10 +28,10 @@ INDEX_FILE = f"{CACHE}/books-index.json"
 COVERS = f"{CACHE}/covers"
 
 THEMES = ("auto", "light", "sepia", "night")
-COVER_MODES = ("designed", "auto", "pdf")                   # designed: made by Kiln for every book; auto: the book's own cover when it has one; pdf: always its first page
+COVER_MODES = ("auto", "pdf", "designed")                   # auto: the first page of the book, a drawn cover only when that page is blank; pdf: always the first page; designed: a cover drawn by Kiln for every book
 COVER_VERSION = 2                                           # changes when the designed covers change, so they are made again
 COLORS = ("yellow", "green", "pink", "blue")                 # highlight colours
-DEFAULTS = dict(dirs=["~/Books"], theme="auto", daily_goal_minutes=20, eye_break_minutes=30, spread=False, covers="designed")
+DEFAULTS = dict(dirs=["~/Books"], theme="auto", daily_goal_minutes=20, eye_break_minutes=30, spread=False, covers="auto")
 MAX_BOOKS, MAX_RECTS, MAX_TEXT, KEEP_DAYS = 3000, 120, 3000, 400
 DAY_MIN_SECS = 60                    # a day counts for the streak from one minute of reading
 PAGE_SEEN_SECS = 4                   # a page counts as read after being in view this long
@@ -55,7 +55,7 @@ def config():
         out["theme"] = "auto"
     out["spread"] = out["spread"] is True
     if out["covers"] not in COVER_MODES:
-        out["covers"] = "designed"
+        out["covers"] = "auto"
     for key, lo, hi in (("daily_goal_minutes", 1, 600), ("eye_break_minutes", 0, 240)):
         try:
             out[key] = max(lo, min(hi, int(out[key])))

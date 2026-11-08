@@ -40,7 +40,7 @@ DEFAULTS = {
     "now_playing": {"youtube_music_only": False},
     "lock_screen": {"widgets": True, "brightness": 0.72, "blur": 0},
     "terminal": {"project_commands": True, "system_input_method": False},
-    "books": {"dirs": ["~/Books"], "theme": "auto", "daily_goal_minutes": 20, "eye_break_minutes": 30, "spread": False, "covers": "designed"},
+    "books": {"dirs": ["~/Books"], "theme": "auto", "daily_goal_minutes": 20, "eye_break_minutes": 30, "spread": False, "covers": "auto"},
     "modes": {"focus_mutes_notifications": True, "focus_dim": True},
     "icons": {"recent_dot": True, "recent_hours": 48},
     "dock": {"cards": ["git", "board", "system", "day", "notes", "tests"], "position": "left"},
@@ -540,12 +540,12 @@ class Settings(Gtk.Window):
         box.pack_start(self.row("Page colours", theme, "Press d in the reader to change it. Sepia and Night are gentler "
                                 "on the eyes in a dim room."), False, False, 0)
         covers = Gtk.ComboBoxText()
-        for k, n in (("designed", "Made by Kiln for every book"), ("auto", "The book's own cover when it has one"),
-                     ("pdf", "Always the first page of the PDF")):
+        for k, n in (("auto", "The book's own cover (first page)"), ("pdf", "Always the first page, even when blank"),
+                     ("designed", "A cover drawn by Kiln for every book")):
             covers.append(k, n)
-        covers.set_active_id(books.get("covers", "designed") if books.get("covers") in ("designed", "auto", "pdf") else "designed")
+        covers.set_active_id(books.get("covers", "auto") if books.get("covers") in ("designed", "auto", "pdf") else "auto")
         covers.connect("changed", lambda c: self.set("books.covers", c.get_active_id()))
-        box.pack_start(self.row("Book covers", covers, "Kiln draws a cover from the title, author and subject of each book. "
+        box.pack_start(self.row("Book covers", covers, "Kiln only draws one when the first page is blank. "
                                 "Covers are made again in the background when you change this."), False, False, 0)
         box.pack_start(self.switch("books.spread", "Two pages side by side",
                                    "Like an open book, with the cover on its own. Press s in the reader to switch at any time; "
