@@ -150,7 +150,7 @@ class BooksViewTests(unittest.TestCase):
         v = self.view
         self.assertEqual(sorted(e["title"] for e in v.entries), ["Test Book", "Test Book"])      # both PDFs have that title
         self.assertEqual(sorted(e["pages"] for e in v.entries), [3, 12])
-        self.assertTrue(all(os.path.exists(f"{self.BK.COVERS}/{e['id']}.png") for e in v.entries))
+        self.assertTrue(all(os.path.exists(self.BK.cover_file(e['id'], 'designed')) for e in v.entries))
         self.draw()
         self.assertTrue(any(k[0] == "open" for _r, k in v.hits))
 

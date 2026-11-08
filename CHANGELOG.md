@@ -7,6 +7,7 @@
   bookmarks, four highlight colours with notes, sepia and night pages, a progress bar and links. Time and pages read are counted
   while you read, and an eye-break reminder comes after 30 minutes. Needs `gir1.2-poppler-0.18`. `kiln books`,
   `kiln mode books`, Settings → Desktop → Books. See `docs/BOOKS.md`.
+* Books: every book gets a **designed cover** (colours and picture by subject, title and author), `books.covers` to use the PDF's own.
 * Books: **two pages side by side** (`s`, a button in the reader, `books.spread`), like an open book with the cover on its own.
 * **Lark Base**: a new service and a **Tasks board** card with a tab per list (projects, your own tasks); what you are
   working on also shows in Today. See `docs/ACCOUNTS.md`.

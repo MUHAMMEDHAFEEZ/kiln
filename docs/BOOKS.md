@@ -14,7 +14,9 @@ sudo apt install gir1.2-poppler-0.18
 
 * Put PDFs in `~/Books` (or the folder in Settings → Desktop → Books). Folders inside it count too. You can also press
   **Add book**, or drop PDF files on the mode; they are copied into the books folder and never replace a file.
-* Covers (the first page), titles, authors and page counts come from the PDFs and are cached in `~/.cache/kiln`.
+* Every book gets a cover that Kiln draws from its title, author and subject, so a plain title page never leaves a blank cover.
+  Set `books.covers` to `auto` to use a book's own cover when it has one, or `pdf` for the first page. Titles, authors and page
+  counts come from the PDFs; all of it is cached in `~/.cache/kiln`.
 * **Continue reading** shows the books you started, newest first, with the page you stopped at, the percentage and about
   how long is left at your own pace with that book.
 * The strip on top shows today's reading against your goal (the ring), your streak, the pages you read and the last

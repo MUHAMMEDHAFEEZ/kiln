@@ -28,8 +28,10 @@ INDEX_FILE = f"{CACHE}/books-index.json"
 COVERS = f"{CACHE}/covers"
 
 THEMES = ("auto", "light", "sepia", "night")
+COVER_MODES = ("designed", "auto", "pdf")                   # designed: made by Kiln for every book; auto: the book's own cover when it has one; pdf: always its first page
+COVER_VERSION = 2                                           # changes when the designed covers change, so they are made again
 COLORS = ("yellow", "green", "pink", "blue")                 # highlight colours
-DEFAULTS = dict(dirs=["~/Books"], theme="auto", daily_goal_minutes=20, eye_break_minutes=30, spread=False)
+DEFAULTS = dict(dirs=["~/Books"], theme="auto", daily_goal_minutes=20, eye_break_minutes=30, spread=False, covers="designed")
 MAX_BOOKS, MAX_RECTS, MAX_TEXT, KEEP_DAYS = 3000, 120, 3000, 400
 DAY_MIN_SECS = 60                    # a day counts for the streak from one minute of reading
 PAGE_SEEN_SECS = 4                   # a page counts as read after being in view this long
@@ -52,6 +54,8 @@ def config():
     if out["theme"] not in THEMES:
         out["theme"] = "auto"
     out["spread"] = out["spread"] is True
+    if out["covers"] not in COVER_MODES:
+        out["covers"] = "designed"
     for key, lo, hi in (("daily_goal_minutes", 1, 600), ("eye_break_minutes", 0, 240)):
         try:
             out[key] = max(lo, min(hi, int(out[key])))
@@ -95,6 +99,33 @@ def scan(dirs=None, limit=MAX_BOOKS):
                 if len(out) >= limit:
                     return out
     return out
+
+
+def cover_file(bid, mode="auto"):
+    return f"{COVERS}/{bid}.{mode}.v{COVER_VERSION}.png"
+
+
+def split_title(title, author=""):
+    """('Reinforcement Learning', 'An Introduction', 'Sutton and Barto') from 'Reinforcement Learning - An Introduction
+    (Sutton and Barto)': what a cover shows as title, subtitle and author."""
+    title = A.clean_text(title, 160)
+    m = re.search(r"\s*\(([^()]{2,60})\)\s*$", title)
+    if m:
+        title, author = title[:m.start()].strip(), author or m.group(1)
+    main, sub = (re.split(r"\s+[-–—]\s+|:\s+", title, maxsplit=1) + [""])[:2]
+    return main.strip() or title, sub.strip(), A.clean_text(author, 80)
+
+
+TOPICS = (("ai", ("learning", "neural", "intelligence", "machine", "deep", "reinforcement", "ai ", " ai", "llm", "data science",
+                  "mathematics for", "statistics")),
+          ("patterns", ("pattern", "architecture", "refactor", "clean code", "idiom", "design")),
+          ("web", ("django", "flask", "python", "web", "http", "rest", "api", "javascript", "react", "docs", "documentation")))
+
+
+def cover_topic(title):
+    """What a book is about, from its title: ai, patterns, web or other (decides the colours and drawing of its cover)."""
+    t = f" {title.casefold()} "
+    return next((k for k, words in TOPICS if any(w in t for w in words)), "other")
 
 
 def title_from_name(path):
@@ -506,8 +537,9 @@ def library(store, index, files, now=None):
         b = store.seen(bid, f["path"], now)
         meta = index.get(f) or {}
         pages = meta.get("pages") or b["pages"]
-        out.append(dict(id=bid, path=f["path"], title=meta.get("title") or title_from_name(f["path"]),
-                        author=meta.get("author", ""), pages=pages, known=bool(meta), size=f["size"],
+        name, sub, name_author = split_title(title_from_name(f["path"]))     # what the file name says (no PDF details yet)
+        out.append(dict(id=bid, path=f["path"], title=meta.get("title") or (f"{name}: {sub}" if sub else name),
+                        author=meta.get("author") or name_author, pages=pages, known=bool(meta), size=f["size"],
                         progress=store.progress(bid), status=store.status(bid), page=b["page"], opened=b["opened"],
                         added=b["added"], marks=len(b["bookmarks"]) + len(b["highlights"]) + len(b["notes"])))
     return out

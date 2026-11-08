@@ -331,22 +331,228 @@ def job_find(doc, page, query):
             for r in p.find_text_with_options(query, Poppler.FindFlags.DEFAULT)]
 
 
-def job_cover(path, dest, width=300):
-    """Title, author, page count of a book and its first page saved as a small PNG (for the library)."""
+# ---- covers
+COVER_W, COVER_H = 300, 400
+PALETTES = {                                    # per topic, variants of (top left, bottom right, accent), one picked per book
+    "ai": [((0.06, 0.09, 0.27), (0.38, 0.19, 0.62), (0.56, 0.82, 1.0)),
+           ((0.04, 0.14, 0.30), (0.09, 0.45, 0.62), (0.62, 0.96, 0.95)),
+           ((0.19, 0.06, 0.25), (0.62, 0.18, 0.46), (1.0, 0.76, 0.86))],
+    "patterns": [((0.04, 0.20, 0.23), (0.09, 0.46, 0.39), (0.99, 0.82, 0.46)),
+                 ((0.22, 0.12, 0.04), (0.62, 0.34, 0.10), (1.0, 0.86, 0.55)),
+                 ((0.07, 0.17, 0.30), (0.12, 0.40, 0.55), (1.0, 0.80, 0.50))],
+    "web": [((0.03, 0.18, 0.13), (0.07, 0.38, 0.26), (0.63, 0.96, 0.72)),
+            ((0.05, 0.16, 0.10), (0.20, 0.42, 0.18), (0.82, 0.96, 0.55))],
+    "other": [((0.20, 0.09, 0.07), (0.58, 0.27, 0.17), (0.96, 0.72, 0.56)),
+              ((0.16, 0.10, 0.20), (0.45, 0.25, 0.45), (0.95, 0.75, 0.90))],
+}
+TOPIC_LABEL = {"ai": "AI & MACHINE LEARNING", "patterns": "SOFTWARE DESIGN", "web": "WEB & PYTHON", "other": "BOOK"}
+
+
+def _text(cr, s, x, y, width, size, rgba, bold=False, spacing=0, max_lines=99, align="l"):
+    """Wrapped text at the top left (x, y); returns the height used."""
+    import gi
+    gi.require_version("PangoCairo", "1.0")
+    gi.require_version("Pango", "1.0")
+    from gi.repository import Pango, PangoCairo
+    lay = PangoCairo.create_layout(cr)
+    fd = Pango.FontDescription()
+    fd.set_family("Ubuntu Sans")
+    fd.set_weight(Pango.Weight.BOLD if bold else Pango.Weight.NORMAL)
+    fd.set_absolute_size(size * Pango.SCALE)
+    lay.set_font_description(fd)
+    lay.set_width(int(width * Pango.SCALE))
+    lay.set_wrap(Pango.WrapMode.WORD_CHAR)                 # (a word that is still too long is broken, never cut off)
+    lay.set_ellipsize(Pango.EllipsizeMode.END)
+    lay.set_height(-max_lines)
+    lay.set_alignment({"l": Pango.Alignment.LEFT, "c": Pango.Alignment.CENTER}[align])
+    if spacing:
+        attrs = Pango.AttrList()
+        attrs.insert(Pango.attr_letter_spacing_new(int(spacing * Pango.SCALE)))
+        lay.set_attributes(attrs)
+    lay.set_text(s, -1)
+    cr.set_source_rgba(*rgba)
+    cr.move_to(x, y)
+    PangoCairo.show_layout(cr, lay)
+    return lay.get_pixel_size()[1], lay.get_line_count()
+
+
+def _fit_title(cr, s, width, max_h):
+    """The biggest size (36 down to 18) at which the title fits in `max_h` pixels."""
+    import gi
+    gi.require_version("PangoCairo", "1.0")
+    gi.require_version("Pango", "1.0")
+    from gi.repository import Pango, PangoCairo
+    for size in range(36, 17, -2):
+        lay = PangoCairo.create_layout(cr)
+        fd = Pango.FontDescription()
+        fd.set_family("Ubuntu Sans")
+        fd.set_weight(Pango.Weight.BOLD)
+        fd.set_absolute_size(size * Pango.SCALE)
+        lay.set_font_description(fd)
+        lay.set_width(int(width * Pango.SCALE))
+        lay.set_wrap(Pango.WrapMode.WORD_CHAR)
+        lay.set_text(s, -1)
+        widest = 0
+        for word in s.split():                              # every word must fit on a line by itself: no broken words
+            lay.set_text(word, -1)
+            lay.set_width(-1)
+            widest = max(widest, lay.get_pixel_size()[0])
+            lay.set_width(int(width * Pango.SCALE))
+        lay.set_text(s, -1)
+        if widest <= width and lay.get_pixel_size()[1] <= max_h:
+            return size
+    return 18
+
+
+def _motif(cr, topic, seed, accent, w, h):
+    """The picture on a cover, in the lower part: a network (AI), interlocking shapes (patterns), layers (web)."""
+    import math
+    import random
+    rnd = random.Random(seed)
+    x0, y0, x1, y1 = 34, h * 0.56, w - 34, h - 62
+    cr.set_line_width(1.2)
+    if topic == "ai":
+        layers = [3, 5, 5, 3] if rnd.random() < 0.5 else [4, 6, 4, 2]
+        pts = []
+        for i, n in enumerate(layers):
+            x = x0 + (x1 - x0) * i / (len(layers) - 1)
+            pts.append([(x + rnd.uniform(-5, 5), y0 + (y1 - y0) * (j + 0.5) / n + rnd.uniform(-4, 4)) for j in range(n)])
+        for a, b in zip(pts, pts[1:]):
+            for p in a:
+                for q in b:
+                    cr.set_source_rgba(*accent, 0.20)
+                    cr.move_to(*p)
+                    cr.line_to(*q)
+                    cr.stroke()
+        for layer in pts:
+            for (x, y) in layer:
+                cr.set_source_rgba(*accent, 0.9)
+                cr.arc(x, y, rnd.choice((3.5, 4.5, 5.5)), 0, 2 * math.pi)
+                cr.fill()
+    elif topic == "patterns":
+        cols, rows = 4, 3
+        cw, ch = (x1 - x0) / cols, (y1 - y0) / rows
+        for r in range(rows):
+            for c in range(cols):
+                cx, cy, k = x0 + (c + 0.5) * cw, y0 + (r + 0.5) * ch, min(cw, ch) * 0.36
+                kind = rnd.randrange(3)
+                cr.set_source_rgba(*accent, 0.85 if (r + c) % 2 == 0 else 0.35)
+                if kind == 0:
+                    cr.arc(cx, cy, k, 0, 2 * math.pi)
+                elif kind == 1:
+                    cr.rectangle(cx - k, cy - k, 2 * k, 2 * k)
+                else:
+                    cr.move_to(cx, cy - k)
+                    cr.line_to(cx + k, cy + k)
+                    cr.line_to(cx - k, cy + k)
+                    cr.close_path()
+                if (r + c) % 2 == 0:
+                    cr.fill()
+                else:
+                    cr.set_line_width(1.6)
+                    cr.stroke()
+    elif topic == "web":
+        n, gap = 6, 8
+        bh = ((y1 - y0) - gap * (n - 1)) / n
+        for i in range(n):
+            bw = (x1 - x0) * rnd.uniform(0.45, 1.0)
+            cr.set_source_rgba(*accent, 0.20 + 0.65 * (i == n - 2))
+            cr.rectangle(x0, y0 + i * (bh + gap), bw, bh)
+            cr.fill()
+            cr.set_source_rgba(*accent, 0.9)
+            cr.arc(x0 + bw + 10, y0 + i * (bh + gap) + bh / 2, 3, 0, 2 * math.pi)
+            cr.fill()
+    else:
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        for i in range(1, 6):
+            cr.set_source_rgba(*accent, 0.15 + 0.12 * i)
+            cr.arc(cx, cy, 16 * i, -math.pi / 2 + i * 0.4, math.pi + i * 0.4)
+            cr.stroke()
+
+
+def design_cover(title, subtitle="", author="", topic="other", seed=0):
+    """A cover made for the book: gradient and picture by topic, the title as large as fits, the author at the bottom.
+    Returns a 300 x 400 image surface."""
+    w, h = COVER_W, COVER_H
+    variants = PALETTES.get(topic, PALETTES["other"])
+    top, bottom, accent = variants[seed % len(variants)]
+    surf = cairo.ImageSurface(cairo.FORMAT_RGB24, w, h)
+    cr = cairo.Context(surf)
+    g = cairo.LinearGradient(0, 0, w, h)
+    g.add_color_stop_rgb(0, *top)
+    g.add_color_stop_rgb(1, *bottom)
+    cr.set_source(g)
+    cr.paint()
+    _motif(cr, topic, seed, accent, w, h)
+    spine = cairo.LinearGradient(0, 0, 14, 0)                      # the shadow where a book's spine would be
+    spine.add_color_stop_rgba(0, 0, 0, 0, 0.35)
+    spine.add_color_stop_rgba(1, 0, 0, 0, 0)
+    cr.set_source(spine)
+    cr.rectangle(0, 0, 14, h)
+    cr.fill()
+    pad, tw = 30, w - 60
+    _text(cr, TOPIC_LABEL.get(topic, "BOOK"), pad, 26, tw, 10.5, (*accent, 0.95), bold=True, spacing=1.6)
+    cr.set_source_rgba(*accent, 0.8)
+    cr.rectangle(pad, 46, 28, 2.5)
+    cr.fill()
+    max_h = h * 0.56 - 62 - (28 if subtitle else 0)
+    size = _fit_title(cr, title, tw, max_h)
+    used, _n = _text(cr, title, pad, 60, tw, size, (1, 1, 1, 1), bold=True, max_lines=6)
+    if subtitle:
+        _text(cr, subtitle, pad, 60 + used + 8, tw, 14, (1, 1, 1, 0.82), max_lines=2)
+    if author:
+        _text(cr, author, pad, h - 42, tw, 13.5, (1, 1, 1, 0.9), bold=True, max_lines=2)
+    cr.set_line_width(1)
+    cr.set_source_rgba(1, 1, 1, 0.14)
+    cr.rectangle(0.5, 0.5, w - 1, h - 1)
+    cr.stroke()
+    return surf
+
+
+def has_own_cover(surface):
+    """True when a rendered first page looks like a real cover (pictures or colour) and not a plain title page."""
+    surface.flush()
+    data, stride = surface.get_data(), surface.get_stride()
+    w, h = surface.get_width(), surface.get_height()
+    dark = total = 0
+    for y in range(0, h, 2):
+        row = y * stride
+        for x in range(0, w, 2):
+            o = row + x * 4
+            total += 1
+            if min(data[o], data[o + 1], data[o + 2]) < 215:
+                dark += 1
+    return total > 0 and dark / total > 0.12
+
+
+def job_cover(path, dest, width=300, mode="designed", fallback_title=""):
+    """Title, author and page count of a book, and its cover saved as a PNG for the library. `mode`: designed (made for
+    every book), auto (its own first page when that is a real cover) or pdf (always its first page)."""
     doc = Poppler.Document.new_from_file(GLib.filename_to_uri(path, None), None)
     n = doc.get_n_pages()
+    title, author = doc.get_title() or "", doc.get_author() or ""
     if n and dest:
-        p = doc.get_page(0)
-        w, h = p.get_size()
-        k = width / w
-        surf = cairo.ImageSurface(cairo.FORMAT_RGB24, width, max(1, round(h * k)))
-        cr = cairo.Context(surf)
-        cr.set_source_rgb(1, 1, 1)
-        cr.paint()
-        cr.scale(k, k)
-        p.render(cr)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
+        surf = None
+        if mode != "designed":
+            p = doc.get_page(0)
+            pw, ph = p.get_size()
+            k = width / pw
+            surf = cairo.ImageSurface(cairo.FORMAT_RGB24, width, max(1, round(ph * k)))
+            cr = cairo.Context(surf)
+            cr.set_source_rgb(1, 1, 1)
+            cr.paint()
+            cr.scale(k, k)
+            p.render(cr)
+            if mode == "auto" and not has_own_cover(surf):
+                surf = None
+        if surf is None:
+            import books as BK
+            shown = title if len(title.strip()) > 3 and not any(j in title.lower() for j in ("microsoft word", "untitled", ".doc", ".tex")) \
+                else fallback_title or title
+            main, sub, who = BK.split_title(shown, author)
+            surf = design_cover(main, sub, who, BK.cover_topic(shown), seed=sum(map(ord, shown)))
         tmp = dest + ".tmp"
         surf.write_to_png(tmp)
         os.replace(tmp, dest)
-    return doc.get_title() or "", doc.get_author() or "", n
+    return title, author, n

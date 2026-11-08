@@ -213,11 +213,13 @@ class BooksView(Gtk.Overlay):
         if not todo:
             return
         self.indexing = True
+        mode = self.cfg["covers"]
 
         def work():
             for f in todo:
                 try:
-                    title, author, pages = RC.job_cover(f["path"], self.cover_path(f))
+                    title, author, pages = RC.job_cover(f["path"], self.cover_path(f), mode=mode,
+                                                        fallback_title=BK.title_from_name(f["path"]))
                 except Exception as exc:                                         # a broken file must not stop the rest
                     print(f"kiln: books: cannot read {os.path.basename(f['path'])}: {exc}", flush=True)
                     title, author, pages = "", "", 0
@@ -245,13 +247,13 @@ class BooksView(Gtk.Overlay):
         return False
 
     def cover_path(self, f):
-        return f"{BK.COVERS}/{BK.book_id(f['path'], f['size'])}.png"
+        return BK.cover_file(BK.book_id(f["path"], f["size"]), self.cfg["covers"])
 
     def cover(self, e):
         """The cover as a surface, or None while there is none yet."""
         if e["id"] in self.covers:
             return self.covers[e["id"]]
-        path = f"{BK.COVERS}/{e['id']}.png"
+        path = BK.cover_file(e["id"], self.cfg["covers"])
         surf = None
         if os.path.exists(path) and self.loaded_now < 4:
             try:
@@ -568,10 +570,11 @@ class BooksView(Gtk.Overlay):
         surf = self.cover(e)
         K.rrect(cr, x, y, w, h, 7)
         if surf:
+            k = max(w / surf.get_width(), h / surf.get_height())              # fills the box, cropping what does not fit
             cr.save()
             cr.clip_preserve()
-            cr.translate(x, y)
-            cr.scale(w / surf.get_width(), h / surf.get_height())
+            cr.translate(x + (w - surf.get_width() * k) / 2, y + (h - surf.get_height() * k) / 2)
+            cr.scale(k, k)
             cr.set_source_surface(surf, 0, 0)
             cr.paint()
             cr.restore()

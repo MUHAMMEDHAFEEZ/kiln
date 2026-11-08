@@ -81,6 +81,36 @@ class FilesTests(Base):
         self.assertEqual(B.title_from_name("/x/Clean_Code-by_Martin.pdf"), "Clean Code-by Martin")
         self.assertEqual(B.title_from_name("/x/.pdf"), "Untitled")
 
+    def test_titles_are_split_for_a_cover(self):
+        self.assertEqual(B.split_title("Reinforcement Learning - An Introduction (Sutton and Barto)"),
+                         ("Reinforcement Learning", "An Introduction", "Sutton and Barto"))
+        self.assertEqual(B.split_title("Python 3 Patterns, Recipes and Idioms (Bruce Eckel)"),
+                         ("Python 3 Patterns, Recipes and Idioms", "", "Bruce Eckel"))
+        self.assertEqual(B.split_title("Clean Code: A Handbook", "Robert Martin"), ("Clean Code", "A Handbook", "Robert Martin"))
+        self.assertEqual(B.split_title("Deep Work", "Cal Newport"), ("Deep Work", "", "Cal Newport"))
+        self.assertEqual(B.split_title("Some (x)"), ("Some (x)", "", ""))                 # too short to be an author
+        self.assertEqual(B.split_title("Bad\x1b[31m title")[0], "Bad[31m title")
+
+    def test_a_book_is_sorted_into_a_topic(self):
+        t = B.cover_topic
+        self.assertEqual([t("Dive into Deep Learning"), t("Reinforcement Learning"), t("Mathematics for Machine Learning")], ["ai"] * 3)
+        self.assertEqual([t("Object-Oriented Reengineering Patterns"), t("Python 3 Patterns, Recipes and Idioms")], ["patterns"] * 2)
+        self.assertEqual(t("Django Documentation"), "web")
+        self.assertEqual(t("Atomic Habits"), "other")
+
+    def test_cover_mode_is_checked_and_files_are_named_by_mode(self):
+        saved = B.CONF
+        self.addCleanup(lambda: setattr(B, "CONF", saved))
+        B.CONF = self.dir
+        self.assertEqual(B.config()["covers"], "designed")
+        with open(f"{self.dir}/config.json", "w") as f:
+            json.dump({"books": {"covers": "auto"}}, f)
+        self.assertEqual(B.config()["covers"], "auto")
+        with open(f"{self.dir}/config.json", "w") as f:
+            json.dump({"books": {"covers": "fancy"}}, f)
+        self.assertEqual(B.config()["covers"], "designed")
+        self.assertNotEqual(B.cover_file("abc", "auto"), B.cover_file("abc", "designed"))
+
     def test_index_remembers_a_file_until_it_changes(self):
         f = fake_pdf(f"{self.dir}/b/one.pdf")
         info = B.scan([f"{self.dir}/b"])[0]
@@ -305,6 +335,8 @@ class LibraryTests(Base):
         titles = {e["id"]: e["title"] for e in self.entries}
         self.assertEqual(titles[self.ids["alpha.pdf"]], "Alpha: An Introduction")
         self.assertEqual(titles[self.ids["Beta_book.pdf"]], "Beta book")
+        named = B.library(self.store, B.Index(f"{self.dir}/none.json"), [dict(path=fake_pdf(f"{self.dir}/b/RL - An Intro (Sutton and Barto).pdf"), size=9, mtime=1)])
+        self.assertEqual((named[0]["title"], named[0]["author"]), ("RL: An Intro", "Sutton and Barto"))
         e = next(e for e in self.entries if e["id"] == self.ids["alpha.pdf"])
         self.assertEqual((e["status"], e["pages"], round(e["progress"], 2)), ("reading", 200, 0.25))
 

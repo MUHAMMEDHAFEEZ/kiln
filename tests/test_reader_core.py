@@ -113,6 +113,52 @@ class TextTests(unittest.TestCase):
         self.assertEqual(R.flip((10, 100, 50, 130), 600), (10, 470, 50, 500))
 
 
+class CoverTests(unittest.TestCase):
+    def test_a_designed_cover_has_the_size_the_colours_and_the_title(self):
+        c = R.design_cover("Dive into Deep Learning", "", "Zhang et al", "ai", seed=0)
+        self.assertEqual((c.get_width(), c.get_height()), (300, 400))
+        c.flush()
+        data, stride = c.get_data(), c.get_stride()
+        top_left = (data[2 * 4 * 0 + 2 + 20 * stride + 5 * 4], data[1 + 20 * stride + 5 * 4], data[0 + 20 * stride + 5 * 4])
+        self.assertTrue(top_left[2] > top_left[0], top_left)                              # the AI palette starts dark blue
+        light = sum(1 for y in range(60, 200, 3) for x in range(30, 270, 3)
+                    if min(data[y * stride + x * 4: y * stride + x * 4 + 3]) > 200)
+        self.assertGreater(light, 40)                                                      # white title letters are there
+
+    def test_topics_variants_and_titles_change_the_picture(self):
+        def pixels(*a, **k):
+            s = R.design_cover(*a, **k)
+            s.flush()
+            return bytes(s.get_data())
+        base = pixels("A Book", "", "Me", "ai", seed=0)
+        self.assertEqual(base, pixels("A Book", "", "Me", "ai", seed=0))                   # the same book, the same cover
+        self.assertNotEqual(base, pixels("A Book", "", "Me", "ai", seed=1))                # another palette
+        self.assertNotEqual(base, pixels("A Book", "", "Me", "web", seed=0))
+        self.assertNotEqual(base, pixels("Other", "", "Me", "ai", seed=0))
+        for topic in R.PALETTES:                                                           # every topic can be drawn
+            R.design_cover("T", "sub", "A", topic, seed=3)
+
+    def test_a_very_long_title_still_fits_without_cutting_words(self):
+        title = "Internationalization Considerations for Extraordinarily Long Programming Language Documentation"
+        c = R.design_cover(title, "A subtitle", "An Author", "other")
+        self.assertEqual((c.get_width(), c.get_height()), (300, 400))
+        surf = cairo.ImageSurface(cairo.FORMAT_RGB24, 10, 10)
+        size = R._fit_title(cairo.Context(surf), title, 240, 200)
+        self.assertLess(size, 36)
+        self.assertGreaterEqual(size, 18)
+
+    def test_a_real_cover_is_told_from_a_page_of_text(self):
+        s = cairo.ImageSurface(cairo.FORMAT_RGB24, 120, 160)
+        cr = cairo.Context(s)
+        cr.set_source_rgb(1, 1, 1)
+        cr.paint()
+        self.assertFalse(R.has_own_cover(s))
+        cr.set_source_rgb(0.1, 0.3, 0.5)
+        cr.rectangle(0, 0, 120, 100)
+        cr.fill()
+        self.assertTrue(R.has_own_cover(s))
+
+
 class ThemeTests(unittest.TestCase):
     def pixel(self, surf, x=1, y=1):
         surf.flush()
@@ -218,9 +264,21 @@ class PopplerTests(unittest.TestCase):
 
     def test_cover_and_details_for_the_library(self):
         dest = f"{self.tmp.name}/cover.png"
-        self.assertEqual(R.job_cover(self.path, dest, width=120), ("Test Book", "Ann Author", 8))
+        self.assertEqual(R.job_cover(self.path, dest, width=120, mode="pdf"), ("Test Book", "Ann Author", 8))
         s = cairo.ImageSurface.create_from_png(dest)
         self.assertEqual((s.get_width(), s.get_height()), (120, 180))
+
+    def test_covers_in_the_three_modes(self):
+        def make(mode):
+            dest = f"{self.tmp.name}/cover-{mode}.png"
+            R.job_cover(self.path, dest, mode=mode, fallback_title="Test Book")
+            return cairo.ImageSurface.create_from_png(dest)
+        designed, pdf, auto = make("designed"), make("pdf"), make("auto")
+        self.assertEqual((designed.get_width(), designed.get_height()), (300, 400))
+        self.assertEqual((pdf.get_width(), pdf.get_height()), (300, 450))               # the page itself: 400 x 600 points
+        self.assertFalse(R.has_own_cover(pdf))                                           # a page of text is not a cover
+        self.assertEqual((auto.get_width(), auto.get_height()), (300, 400))              # so auto draws one
+
 
     def test_a_broken_file_is_reported_not_raised_in_the_window(self):
         bad = f"{self.tmp.name}/bad.pdf"
