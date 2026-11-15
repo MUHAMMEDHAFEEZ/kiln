@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 (2026-11-15)
+
+A big release: a **Books mode** with a PDF library and an open-book reader, a Lark Base tasks board with a Tasks mode, time tracking,
+and fixes for freezes and typing lag in the terminal.
 
 * **Books mode**: a fifth mode for your PDFs. A library with covers, *Continue reading*, filters and a reading-statistics strip
   (today against a goal, streak, pages, the week), and a reader with continuous scrolling, zoom, search, a table of contents,
