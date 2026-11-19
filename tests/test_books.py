@@ -420,3 +420,61 @@ class LibraryTests(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RemoveTests(Base):
+    """"Move to Trash": the PDF goes to the Trash (a fake `gio` here), what Kiln kept about it is forgotten."""
+
+    def setUp(self):
+        super().setUp()
+        self.books = f"{self.dir}/Books"
+        self.trash = f"{self.dir}/trash"
+        os.makedirs(self.trash)
+        self.saved = (B.CONF, B.CACHE, B.COVERS, B.shutil.which)
+        B.CONF, B.CACHE, B.COVERS = self.dir, self.dir, f"{self.dir}/covers"
+        with open(f"{self.dir}/config.json", "w") as f:
+            json.dump({"books": {"dirs": [self.books]}}, f)
+        gio = f"{self.dir}/gio"
+        with open(gio, "w") as f:
+            f.write(f'#!/bin/sh\n[ "$1" = trash ] || exit 2\n[ -n "$FAIL" ] && {{ echo "no trash here" >&2; exit 1; }}\nmv -- "$3" "{self.trash}/"\n')
+        os.chmod(gio, 0o755)
+        B.shutil.which = lambda n: gio if n == "gio" else self.saved[3](n)
+        self.path = fake_pdf(f"{self.books}/Deep Learning.pdf")
+        self.entry = dict(id=B.book_id(self.path), path=self.path)
+        self.store.book(self.entry["id"]).update(page=5, bookmarks=[{"page": 2}], notes=[{"text": "n"}])
+        self.store.log["2026-11-19"] = {"secs": 600}
+        self.store.save()
+        self.index = B.Index(f"{self.dir}/idx.json")
+        self.index.d[self.path] = dict(size=1, mtime=1, title="x", author="", pages=3)
+        os.makedirs(B.COVERS)
+        open(f"{B.COVERS}/{self.entry['id']}.auto.v2.png", "w").close()
+
+    def tearDown(self):
+        B.CONF, B.CACHE, B.COVERS, B.shutil.which = self.saved
+        os.environ.pop("FAIL", None)
+
+    def test_the_file_goes_to_the_trash_and_the_data_is_forgotten(self):
+        self.assertIsNone(B.remove_book(self.store, self.index, self.entry))
+        self.assertFalse(os.path.exists(self.path))
+        self.assertTrue(os.path.exists(f"{self.trash}/Deep Learning.pdf"))
+        self.assertNotIn(self.entry["id"], B.Store(f"{self.dir}/books.json").books)
+        self.assertNotIn(self.path, self.index.d)
+        self.assertEqual(os.listdir(B.COVERS), [])
+        self.assertIn("2026-11-19", B.Store(f"{self.dir}/books.json").log)        # the reading log stays
+
+    def test_when_the_trash_fails_nothing_changes(self):
+        os.environ["FAIL"] = "1"
+        err = B.remove_book(self.store, self.index, self.entry)
+        self.assertIn("no trash", err)
+        self.assertTrue(os.path.exists(self.path))
+        self.assertIn(self.entry["id"], self.store.books)
+
+    def test_only_files_in_the_books_folder_are_touched(self):
+        other = fake_pdf(f"{self.dir}/elsewhere/x.pdf")
+        err = B.remove_book(self.store, self.index, dict(id="abc", path=other))
+        self.assertIn("not in your books folder", err)
+        self.assertTrue(os.path.exists(other))
+        link = f"{self.books}/link.pdf"
+        os.symlink(other, link)                                   # a link out of the folder points outside it too
+        self.assertIn("not in your books folder", B.remove_book(self.store, self.index, dict(id="abd", path=link)))
+        self.assertTrue(os.path.exists(other))

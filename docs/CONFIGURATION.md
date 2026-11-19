@@ -80,6 +80,7 @@ They are calculated on your machine and follow your system's time zone and dayli
 | Key | Default | Meaning |
 |---|---|---|
 | `terminal.project_commands` | `true` | The buttons under the terminal come from the project shown in the work bar (git, plus its `package.json` scripts, Makefile targets, `manage.py`, Cargo, Go, Flutter...), followed by your own `quick-commands.txt`. `false` shows only `quick-commands.txt`. |
+| `terminal.ctrl_v_paste` | `true` | Ctrl+V pastes in the terminal (Ctrl+Shift+V and Shift+Insert always do). |
 | `terminal.cursor_trail` | `true` | A short comet behind the cursor when it jumps. |
 | `terminal.suggestions.enabled` | `true` | Grey suggestions after the cursor (see [TERMINAL.md](TERMINAL.md)). Applies after a restart. |
 | `terminal.suggestions.ai` | `"auto"` | Who answers Ctrl+Space: `auto` (a local Ollama model if it runs), `ollama`, `claude` (the `claude` CLI; the line you typed goes to Anthropic) or `off`. |

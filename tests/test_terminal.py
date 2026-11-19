@@ -39,7 +39,8 @@ class TerminalTests(unittest.TestCase):
         cls.Gdk, cls.Gtk, cls.app, cls.S = Gdk, Gtk, app, suggest
         cls.saved_dirs = (app.APP, app.CACHE)             # app may have been imported by an earlier test
         app.APP, app.CACHE = f"{t}/conf", f"{t}/cache"
-        spit(f"{app.CACHE}/term.bashrc", "PS1='\\u@\\h \\w\\n\\$ '\n")
+        # the prompt, plus what VTE's shell integration does: it writes its own window title at every prompt, after our hook
+        spit(f"{app.CACHE}/term.bashrc", "PS1='\\u@\\h \\w\\n\\$ '\nPROMPT_COMMAND='printf \"\\033]0;user@host:~\\007\"'\n")
         spit(f"{t}/hist", "git status\ngit commit -m 'first'\ngit commit -m 'second'\nexport API_KEY=abc\n")
         spit(f"{t}/log", "")
         cls.saved = (app.SG_HISTORY, dict(app.SG_CFG))
@@ -132,6 +133,47 @@ class TerminalTests(unittest.TestCase):
         self.assertFalse(self.key(self.Gdk.KEY_Tab))
         self.pump(1.8)
         self.assertTrue(self.st["prompt"])
+
+    def test_ctrl_v_pastes_arabic_text_on_any_layout(self):
+        cb = self.Gtk.Clipboard.get(self.Gdk.SELECTION_CLIPBOARD)
+        cb.set_text("\u0627\u0638\u0628\u0637 \u0627\u0644\u0633\u064a\u0631\u0641\u0631 echo", -1)
+        self.pump(0.2)
+        for keyval, hw in ((self.Gdk.KEY_v, 55), (self.Gdk.KEY_Arabic_ra, 55)):          # Latin V, and the same key on an Arabic layout
+            self.clear_line()
+            ev = self.Gdk.Event.new(self.Gdk.EventType.KEY_PRESS)
+            ev.keyval, ev.state, ev.hardware_keycode = keyval, self.Gdk.ModifierType.CONTROL_MASK, hw
+            self.assertTrue(self.card.on_key(self.term, ev))
+            self.pump(0.6)
+            self.assertEqual(self.card._sg_line(self.term), "\u0627\u0638\u0628\u0637 \u0627\u0644\u0633\u064a\u0631\u0641\u0631 echo")
+
+    def test_pasting_copied_files_pastes_their_quoted_paths(self):
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "my file.txt")
+        spit(path, "x")
+        uri = "file://" + path.replace(" ", "%20")
+
+        class Clip:                                              # what the clipboard holds after "Copy" on a file in Files
+            wait_is_text_available = staticmethod(lambda: False)
+            wait_is_uris_available = staticmethod(lambda: True)
+            wait_for_uris = staticmethod(lambda: [uri])
+        real = self.Gtk.Clipboard.get
+        self.Gtk.Clipboard.get = staticmethod(lambda *_a: Clip)
+        self.addCleanup(lambda: setattr(self.Gtk.Clipboard, "get", real))
+        self.clear_line()
+        self.card.paste(self.term)
+        self.pump(0.6)
+        self.assertEqual(self.card._sg_line(self.term).strip(), "'" + path + "'")
+
+    def test_commands_kiln_types_itself_are_not_remembered(self):
+        self.card.run_command("echo injected-by-kiln")
+        self.pump(1.2)
+        self.type_("echo typed-by-me")
+        self.term.feed_child(b"\n")
+        self.pump(1.2)
+        hist = open(os.environ["HISTFILE"]).read()
+        self.assertIn("typed-by-me", hist)
+        self.assertNotIn("injected-by-kiln", hist)
+        self.assertNotIn("injected-by-kiln", open(f"{self.app.APP}/commands.log").read())
 
     def test_a_program_cannot_fake_the_prompt_title(self):
         """A running program that prints the "at the prompt" title must not turn the suggestions on."""

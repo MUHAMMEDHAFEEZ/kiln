@@ -8,11 +8,13 @@ The PDFs are plain files in ~/Books (or the folders in `books.dirs`). What you d
 ~/.config/kiln/books.json: your own data, never sent anywhere. Nothing here needs Poppler; the reader (reader.py) does.
 """
 import datetime
+import glob
 import hashlib
 import json
 import os
 import re
 import shutil
+import subprocess
 import stat
 import sys
 import time
@@ -151,6 +153,45 @@ def clear_custom_cover(bid):
             pass
 
 
+def trash_file(path):
+    """Move a file to the Trash (so it can still be brought back). Returns None, or a short reason it did not work.
+    A file is never deleted for good here: when the Trash cannot take it, it stays where it is."""
+    gio = shutil.which("gio")
+    if not gio:
+        return "there is no Trash tool (gio) on this system"
+    try:
+        r = subprocess.run([gio, "trash", "--", path], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return "the Trash did not answer"
+    if r.returncode != 0:
+        return A.clean_text((r.stderr or "").strip().splitlines()[-1] if (r.stderr or "").strip() else "it cannot be trashed", 120)
+    return None
+
+
+def remove_book(store, index, entry):
+    """Take a book out of the library: its PDF goes to the Trash, and what Kiln kept about it (position, bookmarks,
+    highlights, notes, your cover, the cached cover and title) is forgotten. The reading log (time per day) stays.
+    Returns None, or the reason it did not work (then nothing was changed). Only files inside a books folder are touched."""
+    path, bid = entry["path"], entry["id"]
+    real = os.path.realpath(path)
+    if not any(real.startswith(os.path.realpath(d) + os.sep) for d in config()["dirs"]) or not os.path.isfile(real):
+        return "that file is not in your books folder"
+    err = trash_file(path)
+    if err:
+        return err
+    store.forget(bid)
+    store.save()
+    clear_custom_cover(bid)
+    for f in glob.glob(f"{COVERS}/{bid}.*"):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+    index.d.pop(path, None)
+    index.save()
+    return None
+
+
 def split_title(title, author=""):
     """('Reinforcement Learning', 'An Introduction', 'Sutton and Barto') from 'Reinforcement Learning - An Introduction
     (Sutton and Barto)': what a cover shows as title, subtitle and author."""
@@ -276,6 +317,11 @@ class Store:
     def set_pref(self, key, value):
         if self.prefs.get(key) != value:
             self.prefs[key], self.dirty = value, True
+
+    def forget(self, bid):
+        """Drop everything saved for one book (not the reading log)."""
+        if self.books.pop(bid, None) is not None:
+            self.dirty = True
 
     def save(self):
         _write(self.path, dict(books=self.books, log=self.log, prefs=self.prefs))

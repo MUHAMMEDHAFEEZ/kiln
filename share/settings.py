@@ -39,7 +39,7 @@ DEFAULTS = {
     "prayer": {"enabled": False, "method": "mwl", "asr": "standard", "language": "en"},
     "now_playing": {"youtube_music_only": False},
     "lock_screen": {"widgets": True, "brightness": 0.72, "blur": 0},
-    "terminal": {"project_commands": True, "system_input_method": False, "cursor_trail": True,
+    "terminal": {"project_commands": True, "system_input_method": False, "cursor_trail": True, "ctrl_v_paste": True,
                  "suggestions": {"enabled": True, "ai": "auto", "model": "", "auto_ai": False}},
     "vpn": {"chip": True},
     "books": {"dirs": ["~/Books"], "theme": "auto", "daily_goal_minutes": 20, "eye_break_minutes": 30, "view": "book", "covers": "auto"},
@@ -526,6 +526,9 @@ class Settings(Gtk.Window):
                                 "get the command. Nothing is sent until you ask (unless the next switch is on)."), False, False, 0)
         box.pack_start(self.switch("terminal.suggestions.auto_ai", "Ask the AI as I type",
                                    "After a pause, when history has nothing. Slower on weak computers."), False, False, 0)
+        box.pack_start(self.switch("terminal.ctrl_v_paste", "Ctrl+V pastes",
+                                   "Like every other app (Ctrl+Shift+V and Shift+Insert work too). Off gives Ctrl+V back to "
+                                   "the shell, where it types the next key literally."), False, False, 0)
         box.pack_start(self.switch("terminal.cursor_trail", "Cursor trail",
                                    "A short comet behind the cursor when it jumps."), False, False, 0)
         box.pack_start(self.switch("terminal.system_input_method", "Terminal uses the system input method",

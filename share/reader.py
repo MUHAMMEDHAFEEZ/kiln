@@ -326,6 +326,38 @@ class BooksView(Gtk.Overlay):
             self.toast(f"Cannot use it: {exc}", 5)
         self.area.queue_draw()
 
+    def confirm_remove(self, e):
+        """Ask first: the PDF goes to the Trash and Kiln forgets the place, bookmarks, highlights and notes of the book."""
+        kept = len(self.store.book(e["id"]).get("bookmarks") or []) + len(self.store.book(e["id"]).get("highlights") or []) + \
+            len(self.store.book(e["id"]).get("notes") or [])
+        dlg = Gtk.MessageDialog(transient_for=self.get_toplevel(), modal=True, message_type=Gtk.MessageType.QUESTION,
+                                text=f"Move “{e['title']}” to the Trash?")
+        dlg.format_secondary_text(
+            "The PDF goes to the Trash, so you can still bring it back from there." +
+            (f"\nYour {kept} bookmark{'s' if kept != 1 else ''}, highlight{'s' if kept != 1 else ''} and notes for it, and your "
+             "place in it, are removed from Kiln (export them first if you want to keep them)." if kept else
+             "\nYour place in it is removed from Kiln."))
+        dlg.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Move to Trash", Gtk.ResponseType.OK)
+        dlg.set_default_response(Gtk.ResponseType.CANCEL)
+
+        def done(d, resp):
+            d.destroy()
+            if resp == Gtk.ResponseType.OK:
+                self.remove(e)
+        dlg.connect("response", done)
+        dlg.show()
+
+    def remove(self, e):
+        err = BK.remove_book(self.store, self.index, e)
+        if err:
+            self.toast(f"Could not remove it: {err}", 6)
+            return
+        self.covers.pop(e["id"], None)
+        self.entries = [x for x in self.entries if x["id"] != e["id"]]
+        self.rearrange()
+        self.toast(f"Moved “{e['title']}” to the Trash", 4)
+        self.refresh()
+
     def reset_cover(self, e):
         BK.clear_custom_cover(e["id"])
         self.covers.pop(e["id"], None)
@@ -2153,6 +2185,8 @@ class BooksView(Gtk.Overlay):
         if BK.custom_cover(bid):
             item("Use the automatic cover", lambda: self.reset_cover(e))
         item("Show in folder", lambda: K.run(["xdg-open", os.path.dirname(e["path"])]))
+        menu.append(Gtk.SeparatorMenuItem())
+        item("Move to Trash…", lambda: self.confirm_remove(e))
         menu.show_all()
         menu.popup_at_pointer(ev)
 

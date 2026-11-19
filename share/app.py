@@ -67,7 +67,7 @@ DEFAULT_CONFIG = {
     "web_search": {"name": "DuckDuckGo", "url": "https://duckduckgo.com/?q={q}"},
     "integrations": {"github": True, "lark": False, "claude_code": True},
     "now_playing": {"youtube_music_only": False},
-    "terminal": {"project_commands": True, "system_input_method": False, "cursor_trail": True,
+    "terminal": {"project_commands": True, "system_input_method": False, "cursor_trail": True, "ctrl_v_paste": True,
                  "suggestions": {"enabled": True, "ai": "auto", "model": "", "auto_ai": False}},
     "vpn": {"chip": True},
     "books": {"dirs": ["~/Books"], "theme": "auto", "daily_goal_minutes": 20, "eye_break_minutes": 30, "view": "book", "covers": "auto"},
@@ -2244,7 +2244,7 @@ class TerminalCard(Gtk.Box):
         self.feed(" cd " + shlex.quote(path) + "\n")
 
     def run_command(self, cmd):
-        self.feed(cmd + "\n")
+        self.feed(" " + cmd + "\n")          # a leading space: bash keeps it out of the history, so it is not suggested later
 
     def poll_cwd(self):
         proj = WORK.get("proj")
@@ -2632,8 +2632,9 @@ class TerminalCard(Gtk.Box):
                 adj.set_value(adj.get_value() + (1 if kv == Gdk.KEY_Page_Down else -1) * (adj.get_page_size() - 1))
         elif mods == cs and kv in (Gdk.KEY_C, Gdk.KEY_c):
             self.term.copy_clipboard_format(Vte.Format.TEXT)
-        elif mods == cs and kv in (Gdk.KEY_V, Gdk.KEY_v):
-            self.term.paste_clipboard()
+        elif (mods == cs or (ctrl_only and (CFG.get("terminal") or {}).get("ctrl_v_paste", True))) and \
+                kv in (Gdk.KEY_V, Gdk.KEY_v):
+            self.paste(_w)
         elif mods == cs and kv in (Gdk.KEY_T, Gdk.KEY_t):
             self.new_tab(self.tabs[self.active]["cwd"])
         elif mods == cs and kv in (Gdk.KEY_W, Gdk.KEY_w):
@@ -2650,11 +2651,27 @@ class TerminalCard(Gtk.Box):
             return False
         return True
 
+    def paste(self, term):
+        """Paste what is on the clipboard: text (Arabic too; a multi-line paste is bracketed, so the shell does not run it),
+        or, when files were copied in the file manager, their paths."""
+        cb = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        if cb.wait_is_text_available():
+            term.paste_clipboard()
+            return
+        uris = cb.wait_for_uris() if cb.wait_is_uris_available() else None
+        paths = []
+        for u in uris or []:
+            f = Gio.File.new_for_uri(u)
+            if f.get_path():
+                paths.append(shlex.quote(f.get_path()))
+        if paths:
+            term.paste_text(" ".join(paths) + " ")
+
     def on_term_button(self, _w, ev):
         if ev.button == 3:
             popup_menu(ev, [
                 ("Copy", lambda: self.term.copy_clipboard_format(Vte.Format.TEXT)),
-                ("Paste", lambda: self.term.paste_clipboard()),
+                ("Paste", lambda: self.paste(self.term)),
                 (None, None),
                 ("New tab", lambda: self.new_tab(self.tabs[self.active]["cwd"])),
                 ("Split right  (Ctrl+Shift+E)", lambda: self.split(True)),

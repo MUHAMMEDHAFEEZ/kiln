@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+* **Terminal**: **Ctrl+V pastes** (Arabic text too, on any keyboard layout; copied files paste their paths); `terminal.ctrl_v_paste`.
+* Fixed: the grey suggestions never appeared when the shell's own VTE integration ran (the window title it writes hid Kiln's
+  "prompt is showing" mark). The mark is now the end of the prompt itself. Commands Kiln types itself (switching to a task's
+  branch...) start with a space, so they are not remembered or suggested later.
+* **Books**: right-click a book → **Move to Trash…** (with a confirmation) removes a book you added: the PDF goes to the
+  Trash and Kiln forgets its place, bookmarks, highlights, notes and cover.
+
 ## 1.4.0 (2026-11-19)
 
 A terminal that suggests commands, a Cloudflare WARP card, pictures and files on new tasks, and a details window for every task.

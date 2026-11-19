@@ -26,6 +26,9 @@ sudo apt install gir1.2-poppler-0.18
 * Right-click a book: open, **set a cover image** (a PNG, JPEG or WebP picture, kept in `~/.config/kiln/covers`; "Use the
   automatic cover" undoes it), mark finished or unread, export its highlights and notes as Markdown (a `.notes.md` file next
   to the PDF) or show it in the folder. A book is marked finished when you reach 97% of it.
+* Right-click → **Move to Trash…** removes a book: after you confirm, its PDF goes to the Trash (you can bring it back from
+  there) and Kiln forgets its place, bookmarks, highlights, notes and cover. Only files inside a books folder are touched, and if
+  the Trash cannot take the file nothing is changed. Your reading time per day is kept.
 
 ## The reader
 

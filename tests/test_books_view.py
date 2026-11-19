@@ -203,6 +203,25 @@ class BooksViewTests(unittest.TestCase):
         v.refresh()
         self.assertTrue(self.pump_until(lambda: len(v.entries) == 2, 10))
 
+    def test_a_book_you_added_can_be_moved_to_the_trash(self):
+        src = f"{self.tmp.name}/trash-me.pdf"
+        make_pdf(src, pages=2, link=False)
+        v = self.view
+        v.add_files([src])
+        self.assertTrue(self.pump_until(lambda: len(v.entries) == 3 and not v.indexing, 10))
+        e = next(x for x in v.entries if x["path"].endswith("trash-me.pdf"))
+        trashed = []
+        saved = self.BK.trash_file
+        self.BK.trash_file = lambda path: (trashed.append(path), os.remove(path))[0]        # no real Trash in a test
+        try:
+            v.remove(e)
+        finally:
+            self.BK.trash_file = saved
+        self.assertEqual(trashed, [f"{self.books_dir}/trash-me.pdf"])
+        self.assertEqual(len(v.entries), 2)                                    # gone from the shelf at once
+        self.assertTrue(self.pump_until(lambda: len(v.entries) == 2 and not v.scanning, 10))
+        self.assertNotIn(e["id"], v.store.books)
+
     # ---- reading
     def test_open_scroll_zoom_and_remember_the_place(self):
         v = self.open()

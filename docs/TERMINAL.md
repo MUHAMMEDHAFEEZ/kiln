@@ -45,14 +45,15 @@ Where a suggestion comes from, in this order:
   `terminal.suggestions.auto_ai: true` asks it by itself after a pause when history has nothing.
 
 How it works: the terminal's bash starts from a generated `~/.cache/kiln/term-shell.bashrc` that loads your prompt and
-`~/.bashrc` and then adds a `PROMPT_COMMAND` (logs the command and marks "a prompt is showing" with the window title
-`kiln:prompt`) and a `PS0` (marks "a command is running"). `terminal.suggestions.enabled: false` goes back to the plain
+`~/.bashrc` and then adds a `PROMPT_COMMAND` (logs the command) and ends your prompt with an invisible mark, the window title
+`kiln:prompt`, that says "a prompt is showing" (at the end of the prompt, so the title VTE's shell integration writes cannot hide it; commands Kiln types itself start with a space and are not remembered) and a `PS0` (marks "a command is running"). `terminal.suggestions.enabled: false` goes back to the plain
 setup.
 
 ## Keys
 
 | Key | |
 |---|---|
+| **Ctrl+V** (Ctrl+Shift+V, Shift+Insert) | pastes text, Arabic too, on any keyboard layout; files copied in the file manager paste their paths. `terminal.ctrl_v_paste: false` gives Ctrl+V back to the shell |
 | **Ctrl+C** | copies when text is selected, interrupts otherwise |
 | **Ctrl+F** (Ctrl+Shift+F anywhere) | search the terminal: Enter older match, Shift+Enter newer, Esc closes |
 | **PageUp / PageDown** | scroll the history, at the prompt only (a running program gets the keys) |
