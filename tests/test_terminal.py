@@ -133,6 +133,16 @@ class TerminalTests(unittest.TestCase):
         self.pump(1.8)
         self.assertTrue(self.st["prompt"])
 
+    def test_a_program_cannot_fake_the_prompt_title(self):
+        """A running program that prints the "at the prompt" title must not turn the suggestions on."""
+        self.term.feed_child(b"bash -c \"printf '\\033]0;kiln:prompt\\007'; sleep 2\"\n")
+        self.pump(1.0)
+        self.assertEqual(self.term.get_window_title(), "kiln:prompt")      # the forged title did arrive...
+        self.assertFalse(self.card._sg_at_prompt(self.term))               # ...but the shell is not in front
+        self.assertFalse(self.key(self.Gdk.KEY_Tab))
+        self.pump(2.2)
+        self.assertTrue(self.card._sg_at_prompt(self.term))
+
     def test_a_hash_request_goes_to_the_ai_and_replaces_the_line(self):
         asked = []
         old = self.S.ask_ai

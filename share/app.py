@@ -2304,6 +2304,21 @@ class TerminalCard(Gtk.Box):
         return self._sg.setdefault(term, dict(prompt=False, typed="", full="", kind="", replace=False, token=0,
                                               timer=0, ai_timer=0, thinking=False, note="", hidden_for=None))
 
+    def _sg_at_prompt(self, term):
+        """Is the shell itself waiting for a command? The window title says so, but any program can print that title,
+        so the shell must also be the foreground process of the terminal (a program that is running is not)."""
+        st = self._sg.get(term)
+        if not st or not st["prompt"]:
+            return False
+        pid = next((p.get("pid") for tab in self.tabs for p in tab["panes"] if p["term"] is term), None)
+        pty = term.get_pty()
+        if not pid or pty is None:
+            return False
+        try:
+            return os.tcgetpgrp(pty.get_fd()) == pid
+        except OSError:
+            return False
+
     def _sg_title(self, term):
         st = self._sg_state(term)
         st["prompt"] = term.get_window_title() == "kiln:prompt"
@@ -2314,7 +2329,7 @@ class TerminalCard(Gtk.Box):
 
     def _sg_changed(self, term):
         st = self._sg_state(term)
-        if st["prompt"] and SG_CFG["enabled"]:
+        if SG_CFG["enabled"] and self._sg_at_prompt(term):
             self._sg_schedule(term)
 
     def _sg_clear(self, term):
@@ -2358,7 +2373,7 @@ class TerminalCard(Gtk.Box):
     def _sg_update(self, term):
         st = self._sg_state(term)
         st["timer"] = 0
-        typed = self._sg_line(term) if (st["prompt"] and SG_CFG["enabled"]) else None
+        typed = self._sg_line(term) if (SG_CFG["enabled"] and self._sg_at_prompt(term)) else None
         if typed is None or not typed.strip():
             self._sg_clear(term)
             return False
@@ -2453,7 +2468,7 @@ class TerminalCard(Gtk.Box):
         st = self._sg_state(term)
         mods = ev.state & Gtk.accelerator_get_default_mod_mask()
         kv, ctrl = ev.keyval, Gdk.ModifierType.CONTROL_MASK
-        if not st["prompt"]:
+        if not self._sg_at_prompt(term):
             return False
         if kv == Gdk.KEY_space and mods == ctrl:
             st["typed"] = self._sg_line(term) or ""
@@ -2502,7 +2517,7 @@ class TerminalCard(Gtk.Box):
 
     def _sg_draw(self, term, cr, col, vrow, cw, chh):
         st = self._sg.get(term)
-        if not st or not st["prompt"]:
+        if not st or not self._sg_at_prompt(term):
             return
         room = term.get_column_count() - col - 1
         if st["thinking"]:

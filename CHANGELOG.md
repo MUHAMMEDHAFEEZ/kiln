@@ -29,6 +29,10 @@ A terminal that suggests commands, a Cloudflare WARP card, pictures and files on
   **VPN** card with latency, loss, traffic and mode. Needs `warp-cli`. `vpn.chip`, `dock.cards`.
 * The work bar's Running section no longer shows only a number for servers that do not fit: **+N more ▾** opens the list
   (click a dev server to open it).
+* Security, terminal suggestions: names that come from a project (package.json scripts, Makefile targets, git branches, folders)
+  are suggested only when they are plain words, so `build; rm -rf ~` as a script name is never offered; folder names given to
+  the AI are plain too and Claude runs with no tools; an AI answer that pipes into a shell or wipes a disk is dropped; and
+  a program that prints the "at the prompt" window title can no longer turn the suggestions on (the shell must be in front).
 * Fixed: installing with `--no-apply` removed the shell extension's generated `stylesheet.css` and `logo.svg`, which left the
   top bar unstyled until the theme was applied again.
 
