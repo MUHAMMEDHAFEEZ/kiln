@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.4.0 (2026-11-19)
+
+A terminal that suggests commands, a Cloudflare WARP card, pictures and files on new tasks, and a details window for every task.
+
 * **Task details window**: a click on a task (board, Tasks mode, the Today card) opens a window on the desktop first, not the
   browser. It shows the status, priority, project, department, who it is assigned to, start date and deadline ("in 3 days",
   overdue in red), time spent, attachments, the **description** (Arabic text reads right to left), the progress notes and
@@ -26,6 +29,8 @@
   **VPN** card with latency, loss, traffic and mode. Needs `warp-cli`. `vpn.chip`, `dock.cards`.
 * The work bar's Running section no longer shows only a number for servers that do not fit: **+N more ▾** opens the list
   (click a dev server to open it).
+* Fixed: installing with `--no-apply` removed the shell extension's generated `stylesheet.css` and `logo.svg`, which left the
+  top bar unstyled until the theme was applied again.
 
 ## 1.3.0 (2026-11-15)
 
