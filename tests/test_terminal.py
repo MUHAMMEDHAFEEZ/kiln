@@ -175,6 +175,29 @@ class TerminalTests(unittest.TestCase):
         self.assertNotIn("injected-by-kiln", hist)
         self.assertNotIn("injected-by-kiln", open(f"{self.app.APP}/commands.log").read())
 
+    def test_the_suggestion_shows_in_the_right_place_after_clear(self):
+        """`clear` erases the scrollback and leaves VTE's scroll position out of step with the cursor's row: the cursor
+        is found from the text on the screen instead."""
+        for _ in range(2):
+            self.term.feed_child(b"seq 1 80\nclear\n")
+            self.pump(1.5)
+            self.type_("cl")
+            col, row = self.term.get_cursor_position()
+            self.assertEqual(self.st["full"], "clear")
+            vrow = self.card._visible_row(self.term, col, row)
+            self.assertIsNotNone(vrow)
+            text = (self.term.get_text_format(self.app.Vte.Format.TEXT) or "").split("\n")
+            self.assertEqual(text[vrow].rstrip().split()[-1], "cl")          # the row it draws on is the one with the prompt
+            self.clear_line()
+
+    def test_the_debug_report_says_why_and_never_shows_what_you_typed(self):
+        self.type_("echo secret-words")
+        report = "\n".join(self.card.debug_report())
+        self.assertIn("shell in front: True", report)
+        self.assertIn("line read from the screen: 17 characters", report)
+        self.assertNotIn("secret-words", report)
+        self.assertTrue(os.path.exists(f"{self.app.CACHE}/suggest-debug.txt"))
+
     def test_a_program_cannot_fake_the_prompt_title(self):
         """A running program that prints the "at the prompt" title must not turn the suggestions on."""
         self.term.feed_child(b"bash -c \"printf '\\033]0;kiln:prompt\\007'; sleep 2\"\n")

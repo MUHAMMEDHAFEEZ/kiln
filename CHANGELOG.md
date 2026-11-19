@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased
+* **Scripts widget as a control panel**: besides commands that run once, an entry can **keep running**: **Start / Stop**, a green dot
+  and its uptime, a log, Restart, a stop command of your own (or SIGTERM then SIGKILL, to the whole group, so what it started
+  stops too), a check command for programs started some other way (docker, systemd), and a folder to run in. A program Kiln
+  started is picked up again after Kiln restarts. **Add from a template**: open an app, close an app, VS Code project, dev
+  server, Docker compose up / down, systemd user service, free a port, tests in a terminal.
+* **Tidy arranging**: while you drag a widget in Edit layout it **sticks** to the others (edges and centres line up, and it lands
+  next to another widget with the same 18 px gap Kiln uses) and to the screen, with guide lines showing what it lined up with;
+  the right and bottom edges stick when you resize; **Alt** moves freely. **Shift+click** picks several widgets: they move
+  together, and **Arrange** aligns them (left, centres, right, top, middle, bottom), spaces them evenly, lines them up in a row
+  or stacks them in a column. **Select all** and a switch for sticking are in the same menu.
+* **Widget gallery**: **+ Add widget** (or `kiln widgets`) opens one window with everything you can put on a view: **Create new**
+  (Note, Command output, **Scripts**, Shortcuts, **Web page**, Picture), **Kiln widgets** (the cards that come with Kiln, each with
+  what it does; greyed out when it needs something you have not set up) and **My widgets** (Edit, Duplicate, Take off, Delete).
+  One click adds or takes off, the desktop changes while it is open, and there is a search box.
+* **Scripts widget**: saved commands or multi-line scripts with a ▶ button each, run in the background (green or red dot, last
+  line, full output on right-click) or in a new terminal tab, in the folder you choose.
+* **Web page widget**: a web page inside a widget (WebKit): only http(s), no pop-ups, permission questions or downloads, its own
+  cookies, zoom and reload interval. Needs `gir1.2-webkit2-4.1`.
+* **Edit layout** has **Cancel** (puts everything back as it was when you started) next to Done, and the dialogs of widgets match
+  the theme. Widgets you build: note, command output, shortcuts, picture, as cards you place, resize, hide, edit and delete.
+  `~/.config/kiln/widgets.json`.
+* Fixed: after `clear` the grey suggestion showed in the wrong place or not at all (the terminal's scroll position was out of step
+  with the cursor's row once the scrollback was erased). The cursor's row is now found from the text on the screen.
+* `kiln debug suggest` writes why the grey terminal suggestions do or do not show (title mark, shell in front, the line Kiln
+  reads, scroll state; never what you typed) to `~/.cache/kiln/suggest-debug.txt`.
+* **Views you can manage**: the list in the work bar (*Overview | Coding | Focus | Tasks | Books*) now has a **+** that makes a new
+  view (a new Overview, with a place of its own for every widget), and a right-click menu on each view: **Hide** (any view,
+  kept, not deleted), **Rename**, **Delete** (the ones you made), **New view…** and **Show “Name”** for the hidden ones.
+  **Drag** a view in the list to change the order (Move left / Move right in its menu too).
+  `kiln views`, `kiln mode <name>`. See `docs/LAYOUT.md`.
+* **Edit layout**: every card of the Overview, the Coding mode and your own views (Prayer, Today, Agenda, GitHub, Projects, the
+  terminal, Focus, Now playing, the icons and the big-screen cards Git, Tasks, System, Notes, Tests, Calendar, Services, VPN) is a
+  window of its own. The grid button in the work bar (or `kiln layout`) lets you drag them anywhere, hide them with the x, resize
+  the terminal and the dock cards by their corner, and bring cards back or add any card to a view with **+ Add widget**.
+  Saved in `~/.config/kiln/layout.json`. See `docs/LAYOUT.md`.
+* The top-left card is now the **clock with the five prayer times**, the Hijri date and the next prayer (CPU and RAM moved to
+  the System card).
+
 ## 1.4.1 (2026-11-19)
 
 The terminal's suggestions work with the shell's VTE integration, Ctrl+V pastes, and books can be moved to the Trash.

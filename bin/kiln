@@ -30,7 +30,11 @@ Lists
       cmd: ls | add <text> | done <n> | undo <n> | rm <n> | clear | path
 
 Setup
-  mode [name]              switch the desktop mode: overview | coding | focus | tasks | books | next
+  mode [name]              switch the view: overview | coding | focus | tasks | books | the name of one of yours | next
+  debug suggest            write why the grey terminal suggestions do (not) show to ~/.cache/kiln/suggest-debug.txt
+  layout                   start or end "Edit layout": drag, hide, resize and add widgets (Overview, Coding, your own views)
+  views [hidden]           the views of the work bar (or the ones you hid)
+  widgets                  open the widget gallery (add, remove, build widgets for the view you are on)
   test                     run the tests of the project shown in the work bar
   accounts                 list the connected task and calendar services
   connect <service>        connect Todoist, Trello, Linear, Asana, Jira, Notion, ClickUp, Slack, a calendar ...
@@ -123,7 +127,15 @@ case "$cmd" in
     list_cmd "$f" "$(basename "$f" .txt):" "$@" ;;
   mode)
     mkdir -p "$CACHE"
-    if [ -z "${1:-}" ]; then cat "$CACHE/mode" 2>/dev/null || echo overview; else echo "mode $1" >> "$CACHE/cmd"; fi ;;
+    if [ -z "${1:-}" ]; then cat "$CACHE/mode" 2>/dev/null || echo overview; else echo "mode $(printf '%s' "$*" | tr -d '\n\r')" >> "$CACHE/cmd"; fi ;;
+  layout) mkdir -p "$CACHE"; echo "layout" >> "$CACHE/cmd" ;;
+  widgets) mkdir -p "$CACHE"; echo "gallery" >> "$CACHE/cmd" ;;
+  views)
+    case "${1:-}" in
+      "") /usr/bin/python3 "$SHARE/layout.py" list ;;
+      hidden) /usr/bin/python3 "$SHARE/layout.py" hidden ;;
+      *) die "kiln views [hidden]" ;;
+    esac ;;
   test) mkdir -p "$CACHE"; echo "test" >> "$CACHE/cmd" ;;
   accounts) /usr/bin/python3 "$SHARE/accounts.py" list ;;
   connect|disconnect) [ -n "${1:-}" ] || die "usage: kiln $cmd <service>  (see: kiln accounts)"

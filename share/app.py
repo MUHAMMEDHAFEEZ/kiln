@@ -46,8 +46,14 @@ import timelog as TL  # noqa: E402
 import keys as KEYS  # noqa: E402
 import suggest as SG  # noqa: E402  (grey command suggestions in the terminal)
 import warp as WP  # noqa: E402  (Cloudflare WARP: the work-bar chip and the VPN card)
+import layout as LT  # noqa: E402  (where you put the Overview's widgets: Edit layout)
+import widgets as WG  # noqa: E402  (widgets you build yourself: a note, a command's output, scripts, shortcuts, a web page, a picture)
+import gallery as GAL  # noqa: E402  (the widget gallery of Edit layout)
+import snap as SN  # noqa: E402  (snapping and lining up of widgets while you arrange)
+import svc as SV  # noqa: E402  (programs a Scripts widget starts and stops)
 import reader as RD  # noqa: E402  (the Books mode; draws with the helpers of this file)
 RD.bind(sys.modules[__name__])
+GAL.bind(sys.modules[__name__])
 FONT = "Ubuntu Sans"
 
 # KILN_DEMO=<file.json> shows made-up projects, servers and programs instead of this computer's (for
@@ -992,12 +998,12 @@ def due_label(ts, clock=True):
 # ----------------------------------------------------------------- layout
 COL, GAP = 370, 18
 X2 = COL + GAP
-LAY = dict(strip=(0, 0, COL, 96), today=(0, 114, COL, 272), agenda=(0, 404, COL, 168),
+LAY = dict(strip=(0, 0, COL, 150), today=(0, 168, COL, 218), agenda=(0, 404, COL, 168),
            github=(X2, 0, COL, 318), projects=(X2, 336, COL, 236))
 CARDS_W, CARDS_H = COL * 2 + GAP, 572
 PROJ_ROWS, AGENDA_ROWS = 4, 3
 if not SHOW_AGENDA:                                   # Today runs down to the bottom of the Projects card
-    LAY["today"] = (0, 114, COL, 458)
+    LAY["today"] = (0, 168, COL, 404)
 
 
 def todo_rows():
@@ -1046,14 +1052,23 @@ def pill(cr, x, y, label, size, color, bg_alpha=0.16, align="l", bold=False, fg=
 
 
 # ----------------------------------------------------------------- cards window
+SECTIONS = ("strip", "today", "agenda", "github", "projects")
+CARD_TITLES = dict(strip="Prayer", today="Today", agenda="Agenda", github="GitHub", projects="Projects")       # the cards of the Overview: each can be a window of its own
+
+
 class Cards(Gtk.Overlay):
-    def __init__(self, terminal):
+    """The Overview's cards. With `section` it is one card (Prayer, Today, Agenda, GitHub or Projects) in a window of its own,
+    so it can be moved anywhere; without, all of them in their original places (the layout the tests and Coding mode know)."""
+
+    def __init__(self, terminal, section=None):
         super().__init__()
         self.terminal = terminal
+        self.section = section if section in SECTIONS else None
+        self.ox, self.oy = LAY[self.section][:2] if self.section else (0, 0)       # the card's corner in the shared layout
         self.metrics = Metrics()
         self.hist = {"cpu": [], "ram": []}
         self.area = Gtk.DrawingArea()
-        self.area.set_size_request(CARDS_W, CARDS_H)
+        self.area.set_size_request(*(LAY[self.section][2:] if self.section else (CARDS_W, CARDS_H)))
         self.area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.POINTER_MOTION_MASK |
                              Gdk.EventMask.LEAVE_NOTIFY_MASK | Gdk.EventMask.SCROLL_MASK |
                              Gdk.EventMask.SMOOTH_SCROLL_MASK)
@@ -1065,6 +1080,7 @@ class Cards(Gtk.Overlay):
         self.add(self.area)
 
         tx, ty, tw, _th = LAY["today"]
+        tx, ty = tx - self.ox, ty - self.oy
         self.entry = Gtk.Entry()
         self.entry.set_placeholder_text("Add a task and press Enter…")
         self.entry.set_size_request(tw - 28, 36)
@@ -1121,7 +1137,12 @@ class Cards(Gtk.Overlay):
                 return key
         return None
 
+    def _absolute(self, ev):
+        """Events come in the card's own coordinates; the hit regions are in the shared layout's."""
+        ev.x, ev.y = ev.x + self.ox, ev.y + self.oy
+
     def on_motion(self, _w, ev):
+        self._absolute(ev)
         key = self.hit_at(ev.x, ev.y)
         if key != self.hover:
             self.hover = key
@@ -1164,6 +1185,7 @@ class Cards(Gtk.Overlay):
         run(["/usr/bin/python3", f"{SHARE}/settings.py", "accounts"])
 
     def on_press(self, _w, ev):
+        self._absolute(ev)
         key = self.hit_at(ev.x, ev.y)
         if key is None:
             return False
@@ -1283,6 +1305,7 @@ class Cards(Gtk.Overlay):
         return False
 
     def on_scroll(self, _w, ev):
+        self._absolute(ev)
         step = 0
         if ev.direction == Gdk.ScrollDirection.UP:
             step = -1
@@ -1329,12 +1352,11 @@ class Cards(Gtk.Overlay):
         cr.paint()
         cr.set_operator(cairo.OPERATOR_OVER)
         self.hits = []
-        self.card_strip(cr)
-        self.card_today(cr)
-        if SHOW_AGENDA:
-            self.card_agenda(cr)
-        self.card_github(cr)
-        self.card_projects(cr)
+        cr.translate(-self.ox, -self.oy)
+        for name, draw in (("strip", self.card_strip), ("today", self.card_today), ("agenda", self.card_agenda),
+                           ("github", self.card_github), ("projects", self.card_projects)):
+            if self.section in (None, name) and (name != "agenda" or SHOW_AGENDA or self.section):
+                draw(cr)
         return False
 
     def card(self, cr, name):
@@ -1377,47 +1399,45 @@ class Cards(Gtk.Overlay):
         cr.set_source(grad)
         cr.fill()
 
-    # 1) clock + vitals strip
+    # 1) the clock and the prayer times (a click opens the day's times)
     def card_strip(self, cr):
         x, y, w, h = self.card(cr, "strip")
         self.region(cr, (x + 8, y + 8, w - 16, h - 16), ("strip",), r=12)
-        tw = text(cr, time.strftime(HM), x + 20, y + 54, 40, C["text"])
+        tw = text(cr, time.strftime(HM), x + 20, y + 50, 38, C["text"])
         if not H24:
-            text(cr, time.strftime("%p"), x + 26 + tw, y + 54, 14, C["dim"], bold=True)
-        text(cr, time.strftime("%a, %b %d"), x + 22, y + 78, 13, C["dim"])
-        vline(cr, x + 150, y + 18, y + h - 18)
-        if "system" in DOCK_ACTIVE:                     # the System card already has CPU and RAM
-            self.strip_dates(cr, x, y, w)
-            return
-        rows = [("CPU", self.metrics.cpu, self.hist["cpu"], C["acc"]),
-                ("RAM", self.metrics.mem(), self.hist["ram"], C["acc2"])]
-        for i, (label, val, hist, col) in enumerate(rows):
-            cy = y + 36 + i * 32
-            text(cr, label, x + 168, cy, 11, C["dim"])
-            text(cr, f"{val:.0f}%", x + 238, cy, 14, C["text"], bold=True, align="r")
-            self.sparkline(cr, x + 252, cy - 16, w - 252 - 20, 18, hist, col)
-
-    def strip_dates(self, cr, x, y, w):
-        """Hijri date, and the next prayer (or the week number when no city is set)."""
+            text(cr, time.strftime("%p"), x + 26 + tw, y + 50, 13, C["dim"], bold=True)
         today = datetime.date.today()
         arabic = (CFG.get("prayer") or {}).get("language", "en") == "ar"
-        right = x + w - 20
-        glyph(cr, "moon", x + 166, y + 22, 15, C["acc2"])
-        text(cr, PR.hijri_text(today.year, today.month, today.day, arabic), x + 190, y + 36, 13, C["text"],
-             maxw=right - x - 190, ltr=True)
-        glyph(cr, "timer", x + 166, y + 54, 15, C["acc2"])
+        text(cr, time.strftime("%a, %b %d"), x + 22, y + 72, 12.5, C["dim"])
+        glyph(cr, "moon", x + 176, y + 20, 15, C["acc2"])
+        text(cr, PR.hijri_text(today.year, today.month, today.day, arabic), x + 200, y + 34, 13, C["text"],
+             maxw=x + w - 20 - (x + 200), ltr=True)
         state = prayer_state()
-        if state:
-            _t, name, when = state
-            lang = (CFG.get("prayer") or {}).get("language", "en")
-            nm = PRAYER_AR[name] if lang == "ar" else name
-            nw = text(cr, nm, x + 190, y + 68, 13, C["acc"], bold=True, maxw=70, ltr=True)
-            text(cr, when.strftime(HMP), x + 190 + nw + 8, y + 68, 13, C["acc"], bold=True)
-            text(cr, in_words(when - datetime.datetime.now()), right, y + 68, 11, C["dim"], align="r")
-        else:
-            iso = today.isocalendar()
-            text(cr, f"Week {iso[1]} · day {today.timetuple().tm_yday}", x + 190, y + 68, 13, C["text"],
-                 maxw=right - x - 190)
+        hline(cr, x + 20, x + w - 20, y + 86)
+        if not state:
+            text(cr, "Prayer times are off", x + 22, y + 114, 13, C["text"])
+            text(cr, "Click here to set your city.", x + 22, y + 134, 11.5, C["dim"])
+            return
+        times, nxt, when = state
+        ar = (CFG.get("prayer") or {}).get("language", "en") == "ar"
+        glyph(cr, "timer", x + 176, y + 52, 15, C["acc2"])
+        nm = PRAYER_AR[nxt] if ar else nxt
+        nw = text(cr, nm, x + 200, y + 66, 13, C["acc"], bold=True, maxw=80, ltr=True)
+        text(cr, "in " + in_words(when - datetime.datetime.now()), x + 200 + nw + 8, y + 66, 12, C["dim"])
+        names = ("Fajr", "Dhuhr", "Asr", "Maghrib", "Isha")
+        colw = (w - 40) / len(names)
+        for i, name in enumerate(names):
+            cx = x + 20 + colw * i + colw / 2
+            at = datetime.datetime.combine(today, datetime.time()) + datetime.timedelta(hours=times[name])
+            is_next = name == nxt and when.date() == today
+            passed = at < datetime.datetime.now() and not is_next
+            if is_next:
+                rrect(cr, cx - colw / 2 + 2, y + 94, colw - 4, 46, 10)
+                set_rgba(cr, C["acc"], 0.16)
+                cr.fill()
+            col = C["acc"] if is_next else (C["dim"] if passed else C["text"])
+            text(cr, PRAYER_AR[name] if ar else name, cx, y + 113, 11, col, bold=is_next, align="c", maxw=colw - 6, ltr=True)
+            text(cr, at.strftime(HM if not H24 else "%H:%M"), cx, y + 132, 13, col, bold=is_next, align="c")
 
     # 2) today: tasks of the connected accounts + local tasks
     def today_tabs(self, cr, x, y):
@@ -2370,6 +2390,36 @@ class TerminalCard(Gtk.Box):
                         return tab["cwd"]
         return HOME
 
+    def debug_report(self):
+        """Why the grey suggestions do or do not show, for every pane (`kiln debug suggest`). Never includes what you typed."""
+        out = [f"suggestions enabled: {SG_CFG['enabled']}  ai: {SG_CFG['ai']}  auto_ai: {SG_CFG['auto_ai']}",
+               f"history entries: {len(SG_HISTORY.entries())}"]
+        for ti, tab in enumerate(self.tabs):
+            for pi, pane in enumerate(tab["panes"]):
+                term = pane["term"]
+                st = self._sg.get(term)
+                pid, adj, pty = pane.get("pid"), term.get_vadjustment(), term.get_pty()
+                try:
+                    fg = os.tcgetpgrp(pty.get_fd()) if pty else None
+                except OSError as exc:
+                    fg = repr(exc)
+                col, row = term.get_cursor_position()
+                line = self._sg_line(term)
+                out += [f"-- tab {ti} pane {pi}  shell pid {pid}  foreground group {fg}",
+                        f"   window title: {term.get_window_title()!r}",
+                        f"   marked as prompt: {st and st['prompt']}  shell in front: {self._sg_at_prompt(term)}",
+                        f"   scroll: value {adj.get_value() if adj else None} page {adj.get_page_size() if adj else None} "
+                        f"upper {adj.get_upper() if adj else None}  cursor col {col} row {row}",
+                        f"   line read from the screen: {'none' if line is None else f'{len(line)} characters'}",
+                        f"   suggestion: {'yes ' + str(st['kind']) if st and st['full'] else 'none'}  "
+                        f"thinking {st and st['thinking']}  hidden_for set {bool(st and st['hidden_for'])}  note {st and st['note']!r}"]
+        try:
+            with open(f"{CACHE}/suggest-debug.txt", "w", encoding="utf-8") as f:
+                f.write("\n".join(out) + "\n")
+        except OSError:
+            pass
+        return out
+
     def _sg_update(self, term):
         st = self._sg_state(term)
         st["timer"] = 0
@@ -2499,11 +2549,8 @@ class TerminalCard(Gtk.Box):
         """After the terminal drew itself: the cursor trail, then the suggestion."""
         try:
             col, row = term.get_cursor_position()
-            adj = term.get_vadjustment()
-            if adj is None:
-                return False
-            vrow = row - adj.get_value()
-            if not 0 <= vrow < adj.get_page_size():
+            vrow = self._visible_row(term, col, row)
+            if vrow is None:
                 return False
             cw, chh = term.get_char_width(), term.get_char_height()
             if (CFG.get("terminal") or {}).get("cursor_trail", True):
@@ -2514,6 +2561,26 @@ class TerminalCard(Gtk.Box):
                 self._overlay_err = True
                 print(f"kiln: terminal overlay: {exc!r}", flush=True)
         return False
+
+    def _visible_row(self, term, col, row):
+        """Which row of the window the cursor is on, or None when it is not in view. The cursor's row is counted from the
+        start of everything the terminal remembers, and the scroll position can be out of step with it (after `clear`
+        has erased the scrollback), so when the scroll position says we are at the bottom the row is found from the text
+        that is on the screen: the last line that is the cursor's line."""
+        adj = term.get_vadjustment()
+        if adj is None:
+            return None
+        page = adj.get_page_size()
+        vrow = int(round(row - adj.get_value()))
+        if adj.get_value() + page < adj.get_upper() - 0.5:             # you scrolled up: the scroll position is right
+            return vrow if 0 <= vrow < page else None
+        before = (term.get_text_range_format(Vte.Format.TEXT, row, 0, row, col)[0] or "").rstrip()
+        if before:
+            lines = [ln.rstrip() for ln in (term.get_text_format(Vte.Format.TEXT) or "").split("\n")]
+            hits = [i for i, ln in enumerate(lines) if ln == before]
+            if hits:
+                return vrow if vrow in hits else hits[-1]
+        return vrow if 0 <= vrow < page else None
 
     def _sg_draw(self, term, cr, col, vrow, cw, chh):
         st = self._sg.get(term)
@@ -4986,18 +5053,28 @@ class WorkBar(Gtk.DrawingArea):
         super().__init__()
         self.terminal = terminal
         self.set_size_request(self.W, self.H)
-        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.POINTER_MOTION_MASK |
-                        Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK |
+                        Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK)
         self.connect("draw", self.on_draw)
         self.connect("button-press-event", self.on_press)
+        self.connect("button-release-event", self.on_release)
         self.connect("motion-notify-event", self.on_motion)
         self.connect("leave-notify-event", lambda *_: self._hover(None))
         self.hits, self.hover = [], None
+        self.drag, self.mode_slots = None, []                         # dragging a view to a new place in the list
         self.servers, self.containers, self.proj, self.source = None, None, None, None
         self._busy, self._n, self._pr_t, self._pr = False, 0, 0, None
         self.opened, self.chosen, self._last_active = [], None, {}   # open projects / user's pick
         self.mode = "overview"
         self.on_mode = None                                           # set by main(): switches the desktop mode
+        self.on_layout = None                                         # set by main(): starts or ends "Edit layout"
+        self.on_layout_menu = None                                    # set by main(): "Edit layout" and the views (right click)
+        self.views = None                                             # set by main(): [(id, label)] of the buttons
+        self.on_view_menu = None                                      # set by main(): the menu of a view (right click on it)
+        self.on_new_view = None                                       # set by main(): the + after the buttons
+        self.on_reorder = None                                        # set by main(): a view was dragged: (view, before)
+        self.modes_w = 0
+        self.editing = False
         self.tests = _json_file(f"{CACHE}/tests.json") or {}          # last test run per project
         for v in self.tests.values():
             if v.get("status") == "running":                          # left over from a previous session
@@ -5164,7 +5241,31 @@ class WorkBar(Gtk.DrawingArea):
             self.queue_draw()
 
     def on_motion(self, _w, ev):
+        d = self.drag
+        if d:
+            if not d["active"] and abs(ev.x - d["x0"]) > 8:
+                d["active"] = True
+            d["x"] = ev.x
+            self.queue_draw()
+            return
         self._hover(self._hit(ev.x, ev.y))
+
+    def drop_before(self, view, x):
+        """The view a dragged `view` would go in front of if let go at x (None: at the end)."""
+        others = [(v, sx, sw) for v, sx, sw in self.mode_slots if v != view]
+        return next((v for v, sx, sw in others if x < sx + sw / 2), None)
+
+    def on_release(self, _w, ev):
+        d, self.drag = self.drag, None
+        if not d or ev.button != 1:
+            return False
+        if not d["active"]:                                           # a click: go to that view
+            if self.on_mode:
+                self.on_mode(d["view"])
+        elif self.on_reorder:
+            self.on_reorder(d["view"], self.drop_before(d["view"], d["x"]))
+        self.queue_draw()
+        return True
 
     def _in_tab(self, path, cmd):
         self.terminal.new_tab(path or os.path.expanduser("~"))
@@ -5223,8 +5324,20 @@ class WorkBar(Gtk.DrawingArea):
         kind, it = key
         p = self.proj
         if kind == "mode":
-            if ev.button == 1 and self.on_mode:
-                self.on_mode(it)
+            if ev.button == 1:                                        # a click goes to the view; a drag moves it in the list
+                self.drag = {"view": it, "x0": ev.x, "x": ev.x, "active": False}
+            elif ev.button == 3 and self.on_view_menu:
+                self.on_view_menu(ev, it)
+            return True
+        if kind == "newview":
+            if ev.button == 1 and self.on_new_view:
+                self.on_new_view()
+            return True
+        if kind == "layout":
+            if ev.button == 1 and self.on_layout:
+                self.on_layout()
+            elif ev.button == 3 and self.on_layout_menu:
+                self.on_layout_menu(ev)
             return True
         if kind == "pick":
             if ev.button == 1:
@@ -5393,17 +5506,32 @@ class WorkBar(Gtk.DrawingArea):
         return w
 
     def draw_modes(self, cr, Wf):
-        """Overview | Coding | Focus (| Tasks), at the right end of the bar."""
-        labels = [("overview", "Overview"), ("coding", "Coding"), ("focus", "Focus")] + \
-                 ([("tasks", "Tasks")] if TASKS_MODE[0] else []) + [("books", "Books")]
-        widths = [self._measure(cr, lb, 12.5) + 22 for _k, lb in labels]
-        x0 = Wf - 14 - sum(widths) - 4
-        rrect(cr, x0 - 4, 9, sum(widths) + 8, 32, 16)
+        """The views (Overview | Coding | yours | Focus | Tasks | Books) and a +, at the right end of the bar."""
+        labels = self.views() if self.views else [("overview", "Overview"), ("coding", "Coding"), ("focus", "Focus")] + \
+            ([("tasks", "Tasks")] if TASKS_MODE[0] else []) + [("books", "Books")]
+        widths = [min(150, self._measure(cr, lb, 12.5)) + 22 for _k, lb in labels]
+        plus = 28                                                      # the + that makes a new view
+        x0 = Wf - 14 - sum(widths) - plus - 4
+        self.modes_w = sum(widths) + plus
+        rrect(cr, x0 - 4, 9, sum(widths) + plus + 8, 32, 16)
         set_rgba(cr, C["ink"], 0.06)
         cr.fill()
         vline(cr, x0 - 14, 12, 38)
+        bx = x0 - 14 - 10 - 30                            # "Edit layout": a little grid of tiles
+        hot = self.hover == ("layout", 0)
+        rrect(cr, bx, 12, 30, 26, 13)
+        set_rgba(cr, C["acc"] if self.editing else C["ink"], 1.0 if self.editing else (0.12 if hot else 0.06))
+        cr.fill()
+        for i, (tx, ty, tw_, th_) in enumerate(((0, 0, 6, 8), (8, 0, 6, 4), (0, 10, 6, 4), (8, 6, 6, 8))):
+            rrect(cr, bx + 8 + tx, 18 + ty, tw_, th_, 1.5)
+            set_rgba(cr, C["on_acc"] if self.editing else (C["text"] if hot else C["dim"]), 1.0)
+            cr.fill()
+        self.hits.append(((bx, 9, 30, 32), ("layout", 0)))
         x = x0
+        self.mode_slots = []
+        dragging = self.drag if self.drag and self.drag["active"] else None
         for (key, lb), w in zip(labels, widths):
+            self.mode_slots.append((key, x, w))
             on = self.mode == key
             hot = self.hover == ("mode", key)
             if on:
@@ -5415,9 +5543,38 @@ class WorkBar(Gtk.DrawingArea):
                 set_rgba(cr, C["ink"], 0.10)
                 cr.fill()
             text(cr, lb, x + w / 2, 30, 12.5, C["on_acc"] if on else (C["text"] if hot else C["dim"]),
-                 align="c", bold=on)
+                 align="c", bold=on, maxw=w - 16, alpha=0.35 if dragging and dragging["view"] == key else 1.0)
             self.hits.append(((x, 9, w, 32), ("mode", key)))
             x += w
+        if dragging:                                                   # where it would go, and the view following the pointer
+            before = self.drop_before(dragging["view"], dragging["x"])
+            slot = next((sx for v, sx, sw in self.mode_slots if v == before), None)
+            lx = slot if slot is not None else (self.mode_slots[-1][1] + self.mode_slots[-1][2] if self.mode_slots else x0)
+            set_rgba(cr, C["acc"], 1.0)
+            cr.set_line_width(2.5)
+            cr.move_to(lx, 13)
+            cr.line_to(lx, 37)
+            cr.stroke()
+            label = next((lb for k, lb in labels if k == dragging["view"]), "")
+            lw = min(150, self._measure(cr, label, 12.5)) + 22
+            rrect(cr, dragging["x"] - lw / 2, 12, lw, 26, 13)
+            set_rgba(cr, C["acc"], 0.9)
+            cr.fill()
+            text(cr, label, dragging["x"], 30, 12.5, C["on_acc"], align="c", bold=True, maxw=lw - 16)
+        hot = self.hover == ("newview", 0)                             # +
+        cx, cy = x + plus / 2 - 2, 25
+        if hot:
+            rrect(cr, x + 2, 12, plus - 4, 26, 13)
+            set_rgba(cr, C["ink"], 0.10)
+            cr.fill()
+        set_rgba(cr, C["text"] if hot else C["dim"], 1.0)
+        cr.set_line_width(1.6)
+        cr.move_to(cx - 5, cy)
+        cr.line_to(cx + 5, cy)
+        cr.move_to(cx, cy - 5)
+        cr.line_to(cx, cy + 5)
+        cr.stroke()
+        self.hits.append(((x, 9, plus, 32), ("newview", 0)))
 
     def draw_project(self, cr, x, limit):
         p = self.proj
@@ -5576,7 +5733,7 @@ class WorkBar(Gtk.DrawingArea):
         Wf, H = self.W, self.H
         card_bg(cr, 0, 0, Wf, H, 16)
         self.draw_modes(cr, Wf)
-        W = Wf - MODE_W                                  # everything else lives left of the mode switcher
+        W = Wf - max(MODE_W, int(self.modes_w) + 110)    # everything else lives left of the mode switcher
 
         # the running section is sized first, from the right edge, so the project gets the rest
         servers = self.servers or []
@@ -6208,6 +6365,792 @@ class VpnCard(DockCard):
     def activate(self, key, ev):
         if key[0] == "toggle" and WARP[0]:
             WARP[0].toggle()
+
+
+# --- widgets you build yourself
+class CustomCard(DockCard):
+    """A widget of your own: a note, the output of a command, a list of shortcuts or a picture (see widgets.py)."""
+    PREF_W, TICK = 380, 1
+
+    def __init__(self, wid, store, terminal=None):
+        super().__init__(terminal)
+        self.wid, self.store, self.owner = wid, store, None
+        self.out, self.ok, self.out_at, self.busy = "", True, 0.0, False
+        self.pix, self.pix_key, self.runs, self.svc = None, None, {}, {}
+        self.H = 260
+        self.set_size_request(self.W, self.H)
+        self.apply()
+
+    def spec(self):
+        return self.store.get(self.wid) or {"type": "note", "title": "(deleted)"}
+
+    def apply(self):
+        """Take the title and the content from the store (after an edit)."""
+        sp = self.spec()
+        self.TITLE, self.ICON = sp["title"], WG.ICONS.get(sp["type"], "folder")
+        self.out_at, self.pix_key = 0.0, None
+        if sp["type"] == "scripts":
+            self.adopt()
+        self.queue_draw()
+
+    def _tick(self):
+        sp = self.spec()
+        if sp["type"] == "scripts" and self.get_mapped():
+            self.svc_poll()
+        if self.get_mapped() and sp["type"] == "command" and sp.get("command") and not self.busy and \
+                time.time() - self.out_at >= sp.get("interval", WG.DEFAULT_INTERVAL):
+            self.refresh()
+        return super()._tick()
+
+    def refresh(self):
+        sp = self.spec()
+        if self.busy or sp["type"] != "command":
+            return
+        self.busy, command = True, sp.get("command", "")
+
+        def work():
+            ok, out = WG.run_command(command)
+            GLib.idle_add(self._done, ok, out)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _done(self, ok, out):
+        self.ok, self.out, self.out_at, self.busy = ok, out, time.time(), False
+        self.queue_draw()
+        return False
+
+    def _on_press(self, w, ev):
+        if ev.button == 3 and self.owner:
+            key = self._hit(ev.x, ev.y)
+            if key and key[0] == "run" and hasattr(self.owner, "script_menu"):
+                self.owner.script_menu(self, key[1], ev)
+            else:
+                self.owner.menu(self, ev)
+            return True
+        return super()._on_press(w, ev)
+
+    def body(self, cr, w, h):
+        sp = self.spec()
+        getattr(self, "draw_" + sp["type"])(cr, sp, w, h)
+
+    def hint(self, cr, line1, line2=""):
+        text(cr, line1, 24, 92, 13.5, C["text"], maxw=self.W - 48)
+        if line2:
+            text(cr, line2, 24, 114, 12, C["dim"], maxw=self.W - 48)
+
+    def draw_note(self, cr, sp, w, h):
+        body = (sp.get("text") or "").strip()
+        if not body:
+            return self.hint(cr, "An empty note", "Right-click \u2192 Edit\u2026 to write in it.")
+        rows = max(2, int((h - 74) // 19))
+        text_wrap(cr, body, 22, 70, w - 44, 13.5, C["text"], lines=rows, alpha=0.95, auto=True)
+
+    def draw_command(self, cr, sp, w, h):
+        if not sp.get("command"):
+            return self.hint(cr, "No command yet", "Right-click \u2192 Edit\u2026 and type one.")
+        self.region(("refresh", None), w - 130, 14, 112, 30)
+        age = "running\u2026" if self.busy else ("waiting\u2026" if not self.out_at else since(self.out_at) + " ago"
+                                                   if since(self.out_at) != "now" else "just now")
+        text(cr, "\u21bb " + age, w - 20, 34, 11.5, C["acc"] if self.hover == ("refresh", None) else C["dim"], align="r")
+        rows = max(1, int((h - 74) // 16))
+        lines = (self.out or "").split("\n")[:rows]
+        col = C["text"] if self.ok else C["red"]
+        for i, line in enumerate(lines):
+            text(cr, line, 22, 72 + i * 16, 12, col, mono=True, maxw=w - 44, alpha=0.95, ltr=True)
+
+    # ---- Scripts: commands that run once, and programs that you start and stop
+    def svc_paths(self, i):
+        base = f"{CACHE}/svc/{self.wid}-{i}"
+        return base + ".json", base + ".log"
+
+    def svc_state(self, i):
+        return self.svc.setdefault(i, {"up": False, "popen": None, "pid": None, "started": None, "busy": "", "at": 0.0,
+                                       "checked": 0.0, "checking": False, "exit": None})
+
+    def adopt(self):
+        """After a restart of Kiln: a program it started earlier and that is still running is its own again."""
+        for i, it in enumerate(self.spec().get("items") or []):
+            if it.get("mode") == "service" and not it.get("check"):
+                found = SV.recall(self.svc_paths(i)[0], it["command"])
+                if found:
+                    st = self.svc_state(i)
+                    st.update(up=True, pid=found[0], started=found[1], at=time.time())
+
+    def svc_poll(self):
+        """Every second: is each program still running? (A check command is asked every 3 seconds, in a thread.)"""
+        changed = False
+        for i, it in enumerate(self.spec().get("items") or []):
+            if it.get("mode") != "service":
+                continue
+            st = self.svc_state(i)
+            if it.get("check"):
+                if not st["checking"] and time.time() - st["checked"] >= 3:
+                    st["checking"], st["checked"] = True, time.time()
+                    threading.Thread(target=lambda i=i, c=it["check"]: GLib.idle_add(self._checked, i, SV.run_check(c)),
+                                     daemon=True).start()
+            elif st["up"]:
+                po = st["popen"]
+                gone = po.poll() is not None if po else not SV.alive(st["pid"], st["started"])
+                if gone and not st["busy"]:
+                    st.update(up=False, exit=po.returncode if po else None, pid=None, popen=None)
+                    SV.forget(self.svc_paths(i)[0])
+                    changed = True
+        if changed:
+            self.queue_draw()
+
+    def _checked(self, i, up):
+        st = self.svc_state(i)
+        st["checking"] = False
+        if st["up"] != up and not st["busy"]:
+            st["up"] = up
+            self.queue_draw()
+        return False
+
+    def svc_start(self, i):
+        items = self.spec().get("items") or []
+        if i >= len(items):
+            return
+        it, st = items[i], self.svc_state(i)
+        if st["up"] or st["busy"]:
+            return
+        pidfile, log = self.svc_paths(i)
+        st["exit"] = None
+        if it.get("check"):                                     # a start command that returns (docker, systemctl...): the check says
+            st.update(busy="starting")
+            self.queue_draw()
+
+            def work():
+                ok, out = WG.run_command(it["command"], timeout=60, cwd=it["cwd"], script=True)
+                GLib.idle_add(self._svc_done, i, ok, out)
+            threading.Thread(target=work, daemon=True).start()
+            return
+        try:
+            env = clean_env()
+            env.setdefault("TERM", "dumb")
+            po = SV.spawn(it["command"], it["cwd"], log, env)
+        except OSError as exc:
+            self.runs[i] = {"state": "fail", "out": f"could not start it: {exc.strerror}", "at": time.time()}
+            self.queue_draw()
+            return
+        st.update(up=True, popen=po, pid=po.pid, started=SV.start_time(po.pid), at=time.time())
+        SV.remember(pidfile, po.pid, st["started"], it["command"])
+        self.queue_draw()
+
+    def _svc_done(self, i, ok, out):
+        st = self.svc_state(i)
+        st.update(busy="", checked=0.0)                        # ask the check again at once
+        if not ok:
+            self.runs[i] = {"state": "fail", "out": out, "at": time.time()}
+        self.queue_draw()
+        return False
+
+    def svc_stop(self, i, then=None):
+        """Stop it: your stop command (when there is one), then SIGTERM (SIGKILL after 5 s) to what Kiln started."""
+        items = self.spec().get("items") or []
+        if i >= len(items):
+            return
+        it, st = items[i], self.svc_state(i)
+        if st["busy"] == "stopping":
+            return
+        st["busy"] = "stopping"
+        pid, started = st["pid"], st["started"]
+        self.queue_draw()
+
+        def work():
+            if it.get("stop"):
+                WG.run_command(it["stop"], timeout=60, cwd=it["cwd"], script=True)
+            if pid:
+                SV.terminate(pid, 5.0, started)
+            GLib.idle_add(self._stopped, i, then)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _stopped(self, i, then):
+        st = self.svc_state(i)
+        st.update(busy="", pid=None, popen=None, checked=0.0)
+        items = self.spec().get("items") or []
+        if not (i < len(items) and items[i].get("check")):
+            st["up"] = False
+        SV.forget(self.svc_paths(i)[0])
+        self.queue_draw()
+        if then:
+            GLib.timeout_add(700, lambda: (then(), False)[1])
+        return False
+
+    def svc_restart(self, i):
+        self.svc_stop(i, then=lambda: self.svc_start(i))
+
+    def svc_log(self, i):
+        """What the program printed (its last lines), or what its start command said."""
+        run = self.runs.get(i) or {}
+        return SV.tail(self.svc_paths(i)[1]) or run.get("out", "")
+
+    @staticmethod
+    def age(ts):
+        s = max(0, int(time.time() - ts))
+        return f"{s}s" if s < 60 else f"{s // 60}m" if s < 3600 else f"{s // 3600}h {s % 3600 // 60:02d}m"
+
+    def draw_scripts(self, cr, sp, w, h):
+        items = sp.get("items") or []
+        if not items:
+            return self.hint(cr, "No scripts yet", "Right-click \u2192 Edit\u2026 and add a command, an app or a server.")
+        row = 46
+        for i, it in enumerate(items[:max(1, int((h - 60) // row))]):
+            y = 54 + i * row
+            hot = self.hover == ("run", i)
+            self.region(("run", i), 14, y, w - 28, row - 4)
+            service = it.get("mode") == "service"
+            if service:
+                st = self.svc_state(i)
+                busy, up = st["busy"], st["up"]
+                col = C["amber"] if busy else C["mint"] if up else C["dim"]
+                if busy:
+                    sub = "starting\u2026" if busy == "starting" else "stopping\u2026"
+                elif up:
+                    sub = "running" + (f" \u00b7 {self.age(st['at'])}" if st["pid"] else "")
+                elif st["exit"] not in (None, 0):
+                    sub = f"stopped on its own (exit {st['exit']}) \u00b7 right-click for the log"
+                else:
+                    last = ((self.runs.get(i) or {}).get("out") or "").strip().splitlines()
+                    sub = last[-1] if last else "stopped"
+                bad = not up and st["exit"] not in (None, 0)
+            else:
+                run = self.runs.get(i) or {}
+                col = {"running": C["amber"], "ok": C["mint"], "fail": C["red"]}.get(run.get("state"), C["dim"])
+                up = False
+                sub = ("running\u2026" if run.get("state") == "running" else
+                       (run.get("out", "").strip().splitlines() or ["done"])[-1] if run.get("state") else
+                       ("in a terminal tab" if it["where"] == "terminal" else "runs in the background"))
+                bad = run.get("state") == "fail"
+                busy = False
+            cr.new_path()
+            cr.arc(30, y + 20, 4.5, 0, 2 * math.pi)
+            set_rgba(cr, C["red"] if bad else col, 1)
+            if (service and (up or busy)) or (not service and run.get("state")) or bad:
+                cr.fill()
+            else:
+                cr.set_line_width(1.4)
+                cr.stroke()
+            text(cr, it["label"], 46, y + 17, 13.5, C["text"], maxw=w - 140, ltr=True)
+            text(cr, sub, 46, y + 35, 11, C["red"] if bad else C["dim"], maxw=w - 140, ltr=True,
+                 mono=(not service and bool(run.get("state") in ("ok", "fail"))))
+            label, accent = ("\u25a0", False) if service and up else ("\u25b6", True)
+            if service and busy:
+                label = "\u2026"
+            rrect(cr, w - 62, y + 8, 34, 24, 12)
+            set_rgba(cr, C["acc"] if accent else C["red"], 0.95 if hot else 0.18)
+            cr.fill()
+            text(cr, label, w - 45, y + 25, 11, C["on_acc"] if hot else (C["acc"] if accent else C["red"]), align="c")
+
+    def run_script(self, i, where=None):
+        """A click on a row: run the script once (in the background or in a terminal tab), or start / stop the program."""
+        items = self.spec().get("items") or []
+        if i >= len(items):
+            return
+        if items[i].get("mode") == "service":
+            if self.svc_state(i)["up"]:
+                self.svc_stop(i)
+            else:
+                self.svc_start(i)
+            return
+        it = dict(items[i], where=where or items[i]["where"])
+        if it["where"] == "terminal":
+            term = TERM_REF[0]
+            if term:
+                term.new_tab(os.path.expanduser(it["cwd"]) if it["cwd"] and os.path.isdir(os.path.expanduser(it["cwd"]))
+                             else HOME)
+                GLib.timeout_add(600, lambda: (term.run_command(it["command"].replace("\n", "; ")), False)[1])
+            return
+        if (self.runs.get(i) or {}).get("state") == "running":
+            return
+        self.runs[i] = {"state": "running", "out": "", "at": time.time()}
+        self.queue_draw()
+
+        def work():
+            ok, out = WG.run_command(it["command"], timeout=120, cwd=it["cwd"], script=True)
+            GLib.idle_add(self._ran, i, ok, out)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _ran(self, i, ok, out):
+        self.runs[i] = {"state": "ok" if ok else "fail", "out": out, "at": time.time()}
+        self.queue_draw()
+        return False
+
+    def draw_links(self, cr, sp, w, h):
+        items = sp.get("items") or []
+        if not items:
+            return self.hint(cr, "No shortcuts yet", "Right-click \u2192 Edit\u2026  \u00b7  one per line:  Name = address")
+        row = 34
+        for i, it in enumerate(items[:max(1, int((h - 60) // row))]):
+            y = 56 + i * row
+            kind = WG.classify_target(it["target"])[0]
+            self.region(("link", i), 14, y, w - 28, row - 4)
+            text(cr, it["label"], 26, y + 21, 13.5, C["text"], maxw=w - 100, ltr=True)
+            text(cr, {"url": "\u2197", "path": "\u25b8", "command": "\u203a_"}[kind], w - 26, y + 21, 12, C["dim"], align="r")
+
+    def draw_image(self, cr, sp, w, h):
+        path = os.path.expanduser(sp.get("path") or "")
+        if not path:
+            return self.hint(cr, "No picture yet", "Right-click \u2192 Edit\u2026 and choose one.")
+        bw, bh = max(40, w - 36), max(40, h - 74)
+        key = (path, bw, bh, os.path.getmtime(path) if os.path.exists(path) else 0)
+        if key != self.pix_key:
+            self.pix_key = key
+            try:
+                self.pix = GdkPixbuf.Pixbuf.new_from_file_at_size(path, bw, bh)
+            except GLib.Error:
+                self.pix = None
+        if not self.pix:
+            return self.hint(cr, "Cannot show that picture", path)
+        pw, ph = self.pix.get_width(), self.pix.get_height()
+        x, y = (w - pw) / 2, 58 + (bh - ph) / 2
+        cr.save()
+        rrect(cr, x, y, pw, ph, 10)
+        cr.clip()
+        Gdk.cairo_set_source_pixbuf(cr, self.pix, x, y)
+        cr.paint()
+        cr.restore()
+
+    def activate(self, key, ev):
+        if ev.button != 1:
+            return
+        if key[0] == "refresh":
+            self.out_at = 0.0
+            self.refresh()
+        elif key[0] == "link":
+            items = self.spec().get("items") or []
+            if key[1] < len(items):
+                open_target(items[key[1]]["target"])
+        elif key[0] == "run":
+            self.run_script(key[1])
+
+
+_webkit = {}
+
+
+def webkit():
+    """The WebKit2 module (None when it is not installed). Loaded the first time a Web page widget is built."""
+    if "mod" not in _webkit:
+        os.environ.setdefault("WEBKIT_DISABLE_DMABUF_RENDERER", "1")     # blank pages on some NVIDIA setups without it
+        os.environ.setdefault("JSC_SIGNAL_FOR_GC", "36")                 # WebKit would take SIGUSR1, which opens the launcher
+        try:
+            gi.require_version("WebKit2", "4.1")
+            from gi.repository import WebKit2
+            _webkit["mod"] = WebKit2
+        except (ImportError, ValueError):
+            _webkit["mod"] = None
+    return _webkit["mod"]
+
+
+class WebCard(Gtk.Box):
+    """A web page inside a widget. Only http and https are loaded; pop-ups, permission questions (location, camera,
+    notifications) and downloads are refused; links that want a new window open in your browser. Its cookies are its own
+    (kept in ~/.config/kiln/web/<id>), so a login in one widget is not shared with another."""
+    W, H, PREF_W = 480, 360, 480
+
+    def __init__(self, wid, store, terminal=None):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        self.wid, self.store, self.owner = wid, store, None
+        self.status, self.loaded_url, self._timer = "", "", 0
+        self.hits, self.hover = [], None
+        self.head = Gtk.DrawingArea()
+        self.head.set_size_request(-1, 56)
+        self.head.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.POINTER_MOTION_MASK |
+                             Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        self.head.connect("draw", self._draw_head)
+        self.head.connect("button-press-event", self._press)
+        self.head.connect("motion-notify-event", lambda _w, ev: self._set_hover(self._hit(ev.x, ev.y)))
+        self.head.connect("leave-notify-event", lambda *_: self._set_hover(None))
+        self.pack_start(self.head, False, False, 0)
+        self.view = None
+        wk = webkit()
+        if wk:
+            base = f"{APP}/web/{wid}"
+            cache = f"{CACHE}/web/{wid}"
+            for d in (base, cache):
+                os.makedirs(d, mode=0o700, exist_ok=True)
+            mgr = wk.WebsiteDataManager(base_data_directory=base, base_cache_directory=cache)
+            ctx = wk.WebContext.new_with_website_data_manager(mgr)
+            try:
+                ctx.get_cookie_manager().set_persistent_storage(f"{base}/cookies.sqlite", wk.CookiePersistentStorage.SQLITE)
+            except Exception:                                   # cookies just stay for this session
+                pass
+            ctx.connect("download-started", lambda _c, dl: dl.cancel())
+            self.view = wk.WebView.new_with_context(ctx)
+            st = self.view.get_settings()
+            st.set_property("enable-javascript", True)
+            st.set_property("enable-developer-extras", False)
+            st.set_property("enable-write-console-messages-to-stdout", False)
+            st.set_property("allow-file-access-from-file-urls", False)
+            st.set_property("allow-universal-access-from-file-urls", False)
+            st.set_property("media-playback-requires-user-gesture", True)
+            self.view.set_background_color(Gdk.RGBA(0.09, 0.08, 0.07, 1.0))
+            self.view.connect("decide-policy", self._policy)
+            self.view.connect("create", lambda _v, _nav: None)             # window.open(): refused
+            self.view.connect("permission-request", lambda _v, req: (req.deny(), True)[1])
+            self.view.connect("load-changed", self._load_changed)
+            self.view.connect("load-failed", self._load_failed)
+            self.view.set_margin_start(14)
+            self.view.set_margin_end(14)
+            self.view.set_margin_bottom(14)
+            self.pack_start(self.view, True, True, 0)
+        self.set_size_request(self.W, self.H)
+        self.apply()
+
+    # ---- sizing and content (what the window and the editor call)
+    def set_width(self, w):
+        self.W = int(w)
+        self.set_size_request(self.W, self.H)
+        self.queue_resize()
+
+    def set_height(self, h):
+        self.H = int(h)
+        self.set_size_request(self.W, self.H)
+        self.queue_resize()
+
+    def spec(self):
+        return self.store.get(self.wid) or {"type": "web", "title": "(deleted)", "url": ""}
+
+    @property
+    def TITLE(self):
+        return self.spec()["title"]
+
+    def apply(self):
+        sp = self.spec()
+        if self.view:
+            self.view.set_zoom_level(sp.get("zoom", 100) / 100.0)
+            if sp.get("url") and sp["url"] != self.loaded_url:
+                self.loaded_url = sp["url"]
+                self.status = "loading\u2026"
+                self.view.load_uri(sp["url"])
+        if self._timer:
+            GLib.source_remove(self._timer)
+            self._timer = 0
+        if sp.get("refresh"):
+            self._timer = GLib.timeout_add_seconds(int(sp["refresh"]) * 60, self.refresh)
+        self.head.queue_draw()
+
+    def refresh(self):
+        if self.view and self.get_mapped() and self.spec().get("url"):
+            self.view.reload()
+        return True
+
+    # ---- safety
+    def _policy(self, _view, decision, dtype):
+        wk = webkit()
+        if dtype == wk.PolicyDecisionType.NAVIGATION_ACTION:
+            uri = decision.get_navigation_action().get_request().get_uri() or ""
+            if not uri.lower().startswith(("http://", "https://", "about:blank")):
+                decision.ignore()                                  # file:, javascript: links, custom schemes
+                return True
+        elif dtype == wk.PolicyDecisionType.NEW_WINDOW_ACTION:
+            uri = decision.get_navigation_action().get_request().get_uri() or ""
+            if uri.lower().startswith(("http://", "https://")):
+                open_url(uri)                                      # a link that wants its own window: your browser
+            decision.ignore()
+            return True
+        return False
+
+    def _load_changed(self, view, event):
+        wk = webkit()
+        if event == wk.LoadEvent.FINISHED:
+            self.status = ""
+        elif event == wk.LoadEvent.STARTED:
+            self.status = "loading\u2026"
+        self.head.queue_draw()
+
+    def _load_failed(self, _view, _event, uri, error):
+        self.status = "cannot load" if "cancel" not in str(error).lower() else ""
+        self.head.queue_draw()
+        return False
+
+    # ---- the header
+    def _hit(self, px, py):
+        return next((k for (x, y, w, h), k in reversed(self.hits) if x <= px < x + w and y <= py < y + h), None)
+
+    def _set_hover(self, key):
+        if key != self.hover:
+            self.hover = key
+            self.head.queue_draw()
+
+    def _press(self, _w, ev):
+        key = self._hit(ev.x, ev.y)
+        if ev.button == 3 and self.owner:
+            self.owner.menu(self, ev)
+            return True
+        if ev.button == 1 and key:
+            if key == "reload" and self.view:
+                self.view.reload()
+            elif key == "browser" and self.spec().get("url"):
+                open_url(self.spec()["url"])
+            elif key == "back" and self.view and self.view.can_go_back():
+                self.view.go_back()
+        return True
+
+    def _draw_head(self, _w, cr):
+        sp = self.spec()
+        self.hits = []
+        W = self.W
+        glyph(cr, WG.ICONS["web"], 20, 16, 22, C["acc2"])
+        text(cr, sp["title"], 52, 34, 16, C["text"], bold=True, maxw=W - 190)
+        x = W - 20
+        for key, label in (("browser", "\u2197"), ("reload", "\u21bb"), ("back", "\u2190")):
+            hot = self.hover == key
+            x -= 34
+            self.hits.append(((x, 14, 30, 30), key))
+            rrect(cr, x, 14, 30, 30, 15)
+            set_rgba(cr, C["ink"], 0.14 if hot else 0.06)
+            cr.fill()
+            text(cr, label, x + 15, 35, 14, C["acc"] if hot else C["dim"], align="c")
+        if not self.view:
+            text(cr, "WebKit is not installed (gir1.2-webkit2-4.1)", 24, 78, 12.5, C["red"])
+        elif not sp.get("url"):
+            text(cr, "No address yet: right-click \u2192 Edit\u2026", 24, 78, 12.5, C["dim"])
+        elif self.status:
+            text(cr, self.status, 52, 52, 11, C["dim"], maxw=W - 250)
+        return False
+
+
+def open_target(target):
+    """What a shortcut does: a web address opens in the browser, a file or folder in its own app, anything else runs as a
+    command in the background."""
+    kind, value = WG.classify_target(target)
+    if kind == "url":
+        open_url(value)
+    elif kind == "path":
+        run(["xdg-open", value])
+    elif value:
+        run(["/bin/bash", "-c", value])
+
+
+def scripts_editor(box, items):
+    """The entries of a Scripts widget inside a dialog: a card per entry (name, runs once or keeps running, folder, the command,
+    and for a program its stop command and a check) and buttons to add one, or one from a template. Returns a function that
+    gives the entries."""
+    rows = []
+    scroll = Gtk.ScrolledWindow()
+    scroll.set_size_request(600, 380)
+    scroll.set_shadow_type(Gtk.ShadowType.IN)
+    holder = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+    for side in ("start", "end", "top", "bottom"):
+        getattr(holder, f"set_margin_{side}")(12)
+    scroll.add(holder)
+    note = Gtk.Label(label="An entry that runs once is a button. An entry that keeps running (a server, an app) has Start and Stop, "
+                           "shows whether it is running, and keeps a log. Everything runs with bash, as you.", xalign=0)
+    note.set_line_wrap(True)
+    note.get_style_context().add_class("dim-label")
+    box.pack_start(note, False, False, 0)
+    box.pack_start(scroll, True, True, 0)
+
+    def small(txt):
+        lb = Gtk.Label(label=txt, xalign=0)
+        lb.get_style_context().add_class("dim-label")
+        return lb
+
+    def text_area(initial, height):
+        tv = Gtk.TextView()
+        tv.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        tv.set_monospace(True)
+        tv.get_buffer().set_text(initial)
+        fr = Gtk.ScrolledWindow()
+        fr.set_size_request(-1, height)
+        fr.set_shadow_type(Gtk.ShadowType.IN)
+        fr.add(tv)
+        return tv, fr
+
+    def add_row(it=None):
+        it = it or {}
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        top = Gtk.Box(spacing=6)
+        name = Gtk.Entry()
+        name.set_placeholder_text("Name, for example  Dev server")
+        name.set_text(it.get("label", ""))
+        name.set_max_length(40)
+        mode = Gtk.ComboBoxText()
+        mode.append("run", "Runs once")
+        mode.append("service", "Keeps running: Start / Stop")
+        mode.set_active_id(it.get("mode", "run"))
+        gone = Gtk.Button(label="\u2715")
+        gone.set_tooltip_text("Remove this entry")
+        top.pack_start(name, True, True, 0)
+        top.pack_start(mode, False, False, 0)
+        top.pack_start(gone, False, False, 0)
+        second = Gtk.Box(spacing=6)
+        where = Gtk.ComboBoxText()
+        where.append("background", "Run in the background")
+        where.append("terminal", "Run in a terminal tab")
+        where.set_active_id(it.get("where", "background"))
+        folder = Gtk.Entry()
+        folder.set_placeholder_text("Folder to run it in (optional)  ~/code/app")
+        folder.set_text(it.get("cwd", ""))
+        second.pack_start(where, False, False, 0)
+        second.pack_start(folder, True, True, 0)
+        cmd_label = small("Command")
+        cmd, cmd_frame = text_area(it.get("command", ""), 62)
+        svc_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        stop_tv, stop_frame = text_area(it.get("stop", ""), 40)
+        check = Gtk.Entry()
+        check.set_placeholder_text("a command that succeeds while it runs, e.g.  ss -ltn | grep -q ':3000 '")
+        check.set_text(it.get("check", ""))
+        svc_box.pack_start(small("Stop command (optional: without one, Stop sends it SIGTERM, then SIGKILL)"), False, False, 0)
+        svc_box.pack_start(stop_frame, False, False, 0)
+        svc_box.pack_start(small("Is it running? check (optional: for something started by docker, systemd... "
+                                 "the button follows this instead of the process)"), False, False, 0)
+        svc_box.pack_start(check, False, False, 0)
+        for wdg in (top, second, cmd_label, cmd_frame, svc_box):
+            card.pack_start(wdg, False, False, 0)
+        wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        wrap.pack_start(card, False, False, 0)
+        wrap.pack_start(Gtk.Separator(), False, False, 0)
+        holder.pack_start(wrap, False, False, 0)
+        row = dict(name=name, mode=mode, where=where, folder=folder, cmd=cmd, stop=stop_tv, check=check, wrap=wrap)
+        rows.append(row)
+
+        def sync(*_a):
+            service = mode.get_active_id() == "service"
+            where.set_visible(not service)
+            svc_box.set_visible(service)
+            cmd_label.set_text("Start command" if service else "Command or script")
+        mode.connect("changed", sync)
+        gone.connect("clicked", lambda _b: (rows.remove(row), wrap.destroy()))
+        wrap.show_all()
+        sync()
+        return name
+    for it in items:
+        add_row(it)
+    if not items:
+        add_row()
+    bar = Gtk.Box(spacing=8)
+    more = Gtk.Button(label="+ Add an entry")
+    more.connect("clicked", lambda _b: (add_row().grab_focus(), GLib.idle_add(
+        lambda: (scroll.get_vadjustment().set_value(scroll.get_vadjustment().get_upper()), False)[1])))
+    templ = Gtk.MenuButton(label="Add from a template \u25be")
+    menu = Gtk.Menu()
+    for label, entry in WG.SCRIPT_TEMPLATES:
+        mi = Gtk.MenuItem(label=label)
+        mi.connect("activate", lambda _m, e=entry: (add_row(e).grab_focus(), GLib.idle_add(
+            lambda: (scroll.get_vadjustment().set_value(scroll.get_vadjustment().get_upper()), False)[1])))
+        menu.append(mi)
+    menu.show_all()
+    templ.set_popup(menu)
+    bar.pack_start(more, True, True, 0)
+    bar.pack_start(templ, False, False, 0)
+    box.pack_start(bar, False, False, 0)
+
+    def get():
+        out = []
+        for r in rows:
+            buf, sbuf = r["cmd"].get_buffer(), r["stop"].get_buffer()
+            out.append({"label": r["name"].get_text(), "mode": r["mode"].get_active_id(), "where": r["where"].get_active_id(),
+                        "cwd": r["folder"].get_text(), "command": buf.get_text(*buf.get_bounds(), True),
+                        "stop": sbuf.get_text(*sbuf.get_bounds(), True), "check": r["check"].get_text()})
+        return out
+    return get
+
+
+def widget_dialog(wtype, spec=None, parent=None):
+    """Ask for what a widget of kind `wtype` needs (a window with the right fields). Returns {fields} or None."""
+    spec = spec or {}
+    dlg = Gtk.Dialog(title=("Edit the " if spec else "New ") + WG.TYPES[wtype].lower(), transient_for=parent, modal=True)
+    dlg.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Save" if spec else "Create", Gtk.ResponseType.OK)
+    dlg.set_default_response(Gtk.ResponseType.OK)
+    box = dlg.get_content_area()
+    box.set_spacing(8)
+    for side in ("start", "end", "top", "bottom"):
+        getattr(box, f"set_margin_{side}")(16)
+
+    def label(txt):
+        lb = Gtk.Label(label=txt, xalign=0)
+        lb.get_style_context().add_class("dim-label")
+        box.pack_start(lb, False, False, 0)
+
+    def area(initial, height=170):
+        tv = Gtk.TextView()
+        tv.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        tv.get_buffer().set_text(initial)
+        sw = Gtk.ScrolledWindow()
+        sw.set_size_request(440, height)
+        sw.set_shadow_type(Gtk.ShadowType.IN)
+        sw.add(tv)
+        box.pack_start(sw, True, True, 0)
+        return lambda: tv.get_buffer().get_text(*tv.get_buffer().get_bounds(), True)
+
+    def entry(initial, placeholder=""):
+        e = Gtk.Entry()
+        e.set_text(initial)
+        e.set_placeholder_text(placeholder)
+        e.set_activates_default(wtype != "note")
+        box.pack_start(e, False, False, 0)
+        return e
+    label("Title")
+    title = entry(spec.get("title", ""), WG.TYPES[wtype])
+    title.set_max_length(WG.MAX_TITLE)
+    collect = {}
+    if wtype == "note":
+        label("Text")
+        get = area(spec.get("text", ""), 200)
+        collect["text"] = get
+    elif wtype == "command":
+        label("Command (runs as you, in the background)")
+        cmd = entry(spec.get("command", ""), "for example:  df -h /   or   git -C ~/code/app status -sb")
+        label("Run it again every (seconds)")
+        spin = Gtk.SpinButton.new_with_range(WG.MIN_INTERVAL, WG.MAX_INTERVAL, 5)
+        spin.set_value(spec.get("interval", WG.DEFAULT_INTERVAL))
+        box.pack_start(spin, False, False, 0)
+        collect["command"] = lambda: cmd.get_text()
+        collect["interval"] = lambda: spin.get_value_as_int()
+    elif wtype == "web":
+        label("Web address (only http and https are loaded)")
+        url = entry(spec.get("url", ""), "example.com    or    localhost:3000")
+        label("Zoom (%)")
+        zoom = Gtk.SpinButton.new_with_range(WG.MIN_ZOOM, WG.MAX_ZOOM, 10)
+        zoom.set_value(spec.get("zoom", 100))
+        box.pack_start(zoom, False, False, 0)
+        label("Reload every (minutes, 0 = never)")
+        refresh = Gtk.SpinButton.new_with_range(0, WG.MAX_REFRESH, 1)
+        refresh.set_value(spec.get("refresh", 0))
+        box.pack_start(refresh, False, False, 0)
+        label("The page has its own cookies (a login stays), cannot open pop-ups or ask for your location, camera or "
+              "notifications, and cannot download files.")
+        collect["url"] = lambda: url.get_text()
+        collect["zoom"] = lambda: zoom.get_value_as_int()
+        collect["refresh"] = lambda: refresh.get_value_as_int()
+    elif wtype == "scripts":
+        collect["items"] = scripts_editor(box, spec.get("items") or [])
+    elif wtype == "links":
+        label("One shortcut per line:  Name = address.  A web address opens in the browser, a folder or file in its app, "
+              "anything else runs as a command.")
+        get = area(WG.links_text(spec.get("items")), 170)
+        collect["items"] = lambda: WG.parse_links(get())
+    elif wtype == "image":
+        label("Picture")
+        row = Gtk.Box(spacing=6)
+        path = Gtk.Entry()
+        path.set_text(spec.get("path", ""))
+        path.set_placeholder_text("~/Pictures/photo.png")
+        path.set_activates_default(True)
+        pick = Gtk.Button(label="Choose\u2026")
+
+        def choose(_b):
+            fc = Gtk.FileChooserDialog(title="Choose a picture", transient_for=dlg, action=Gtk.FileChooserAction.OPEN)
+            fc.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Use this picture", Gtk.ResponseType.OK)
+            flt = Gtk.FileFilter()
+            flt.set_name("Pictures")
+            for pat in ("*.png", "*.jpg", "*.jpeg", "*.webp", "*.gif", "*.svg", "*.PNG", "*.JPG", "*.JPEG"):
+                flt.add_pattern(pat)
+            fc.add_filter(flt)
+            if fc.run() == Gtk.ResponseType.OK:
+                path.set_text(fc.get_filename())
+            fc.destroy()
+        pick.connect("clicked", choose)
+        row.pack_start(path, True, True, 0)
+        row.pack_start(pick, False, False, 0)
+        box.pack_start(row, False, False, 0)
+        collect["path"] = lambda: path.get_text()
+    dlg.show_all()
+    title.grab_focus()
+    ok = dlg.run() == Gtk.ResponseType.OK
+    out = {"title": title.get_text(), **{k: f() for k, f in collect.items()}} if ok else None
+    dlg.destroy()
+    return out
 
 
 # --- Tests: status of the last run and the tail of its output
@@ -7847,6 +8790,18 @@ dialog entry selection { background-color: #$sel; color: #$on_sel; }
 dialog button { background: $ink06; color: #$menu_fg; border: 1px solid $border50; border-radius: 10px; box-shadow: none; }
 dialog button:hover { background: $ink10; }
 dialog button.default, dialog button.suggested-action { background: #$sel; border-color: #$sel; color: #$on_sel; }
+dialog textview, dialog textview text { background-color: $ink06; color: #$text; caret-color: #$acc; }
+dialog textview text selection { background-color: #$sel; color: #$on_sel; }
+dialog spinbutton { background: $ink06; color: #$text; border: 1px solid $border60; border-radius: 10px; box-shadow: none; }
+dialog spinbutton entry { background: transparent; border: none; }
+dialog spinbutton button { background: transparent; border: none; color: #$menu_fg; }
+dialog scrolledwindow { border-radius: 10px; }
+dialog label.dim-label { color: #$dim; }
+label.kiln-gtitle { color: #$text; font-size: 22px; font-weight: bold; }
+label.kiln-gsub { color: #$dim; font-size: 12.5px; }
+label.kiln-section { color: #$dim; font-size: 11px; font-weight: bold; }
+button.kiln-primary { background: #$acc; color: #$on_acc; border: none; border-radius: 12px; padding: 7px 22px; font-weight: bold; box-shadow: none; }
+button.kiln-primary:hover { background: #$acc_hi; }
 """
 
 
@@ -7861,6 +8816,305 @@ def build_css():
 
 
 CSS = build_css()
+
+
+# ----------------------------------------------------------------- edit layout
+class EditLayer(Gtk.DrawingArea):
+    """Laid over a widget's window while you arrange the Overview: drag it anywhere, the x takes it off the Overview,
+    the corner of a resizable one changes its size. Nothing is changed in the widget itself."""
+    GRIP = 24
+
+    def __init__(self, win, key, title, resizable, owner):
+        super().__init__()
+        self.win, self.key, self.title, self.resizable, self.owner = win, key, title, resizable, owner
+        self.custom = key.startswith("custom_")                   # a widget you built: it also has Edit
+        self.selected = False                                     # picked with Shift+click, to move or line up with others
+        self.drag = None
+        self.hover = None
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK |
+                        Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        self.connect("draw", self.on_draw)
+        self.connect("button-press-event", self.on_press)
+        self.connect("button-release-event", self.on_release)
+        self.connect("motion-notify-event", self.on_motion)
+        self.connect("leave-notify-event", lambda *_: self._hover(None))
+        self.set_no_show_all(True)
+
+    def _zone(self, x, y):
+        w, h = self.get_allocated_width(), self.get_allocated_height()
+        if (w - x - 30) ** 2 + (y - 30) ** 2 < 14 ** 2 or (x > w - 40 and y < 40):
+            return "hide"
+        if self.custom and w - 99 <= x < w - 51 and 16 <= y <= 44:
+            return "edit"
+        if self.resizable and x > w - self.GRIP - 6 and y > h - self.GRIP - 6:
+            return "resize"
+        return "move"
+
+    def _hover(self, z):
+        if z != self.hover:
+            self.hover = z
+            self.queue_draw()
+            win = self.get_window()
+            if win:
+                names = {"move": "grab", "resize": "se-resize", "hide": "pointer", "edit": "pointer"}
+                win.set_cursor(Gdk.Cursor.new_from_name(Gdk.Display.get_default(), names[z]) if z else None)
+
+    def on_motion(self, _w, ev):
+        if not self.drag:
+            self._hover(self._zone(ev.x, ev.y))
+            return True
+        kind, x0, y0, ox, oy = self.drag
+        dx, dy = ev.x_root - x0, ev.y_root - y0
+        if kind == "move":
+            self.owner.moved(self, ox + dx, oy + dy, ev.state)
+        else:
+            self.owner.resized(self, ox + dx, oy + dy, ev.state)
+        return True
+
+    def on_press(self, _w, ev):
+        if ev.button == 3:
+            self.owner.layer_menu(self, ev)
+            return True
+        if ev.button != 1:
+            return True
+        z = self._zone(ev.x, ev.y)
+        if z == "hide":
+            self.owner.hide_widget(self.key)
+            return True
+        if z == "edit":
+            self.owner.edit_widget(self.key)
+            return True
+        if ev.state & Gdk.ModifierType.SHIFT_MASK and z != "hide":       # Shift+click picks several widgets
+            self.owner.toggle_select(self.key)
+            return True
+        w, h = self.get_allocated_width(), self.get_allocated_height()
+        px, py = self.win._pos
+        gw = self.win.get_window()
+        if gw:
+            gw.raise_()                                       # the one you hold is on top of the others
+        self.owner.drag_start(self)
+        self.drag = ("move", ev.x_root, ev.y_root, px, py) if z == "move" else ("resize", ev.x_root, ev.y_root, w, h)
+        self._hover("move" if z == "move" else "resize")
+        return True
+
+    def on_release(self, _w, ev):
+        if self.drag:
+            self.drag = None
+            self.owner.finished(self)
+        return True
+
+    def on_draw(self, _w, cr):
+        w, h = self.get_allocated_width(), self.get_allocated_height()
+        rrect(cr, 1, 1, w - 2, h - 2, 20)
+        set_rgba(cr, C["acc"], 0.34 if self.selected else 0.20 if self.drag else 0.12)
+        cr.fill_preserve()
+        set_rgba(cr, C["acc"], 0.95)
+        cr.set_line_width(3.5 if self.selected else 2)
+        if not self.selected:
+            cr.set_dash([7, 5])
+        cr.stroke()
+        cr.set_dash([])
+        if self.selected:                                         # a tick: it is part of the selection
+            cr.arc(26, 30, 13, 0, 2 * math.pi)
+            set_rgba(cr, C["acc"], 1.0)
+            cr.fill()
+            set_rgba(cr, C["on_acc"], 1.0)
+            cr.set_line_width(2.4)
+            cr.move_to(20, 30)
+            cr.line_to(25, 35)
+            cr.line_to(33, 24)
+            cr.stroke()
+        probe = PangoCairo.create_layout(cr)                      # the name of the widget, in the middle of it
+        fd = Pango.FontDescription()
+        fd.set_family(FONT)
+        fd.set_weight(Pango.Weight.BOLD)
+        fd.set_absolute_size(15 * Pango.SCALE)
+        probe.set_font_description(fd)
+        probe.set_text(self.title, -1)
+        pw = probe.get_pixel_size()[0] + 14
+        pill(cr, (w - pw) / 2, h / 2 + 6, self.title, 15, C["acc"], bg_alpha=0.85, bold=True, fg=C["on_acc"])
+        # the x
+        hot = self.hover == "hide"
+        cr.arc(w - 30, 30, 13, 0, 2 * math.pi)
+        set_rgba(cr, C["red"] if hot else C["ink"], 0.9 if hot else 0.18)
+        cr.fill()
+        set_rgba(cr, C["text"], 1)
+        cr.set_line_width(2)
+        for a, b in (((-4, -4), (4, 4)), ((-4, 4), (4, -4))):
+            cr.move_to(w - 30 + a[0], 30 + a[1])
+            cr.line_to(w - 30 + b[0], 30 + b[1])
+        cr.stroke()
+        if self.custom:
+            hot = self.hover == "edit"
+            rrect(cr, w - 99, 17, 48, 26, 13)
+            set_rgba(cr, C["acc"], 0.95 if hot else 0.8)
+            cr.fill()
+            text(cr, "Edit", w - 75, 35, 12, C["on_acc"], bold=True, align="c")
+        if self.resizable:
+            g = self.GRIP
+            cr.move_to(w - 8, h - 8 - g)
+            cr.line_to(w - 8, h - 8)
+            cr.line_to(w - 8 - g, h - 8)
+            cr.close_path()
+            set_rgba(cr, C["acc"], 0.95 if self.hover == "resize" else 0.6)
+            cr.fill()
+        return True
+
+
+class GuideOverlay(Gtk.Window):
+    """A transparent window over the whole screen that draws the alignment guides while you drag (clicks go through it)."""
+
+    def __init__(self, x, y, w, h):
+        super().__init__(type=Gtk.WindowType.POPUP)
+        self.set_title("Kiln Guides")
+        self.set_app_paintable(True)
+        vis = self.get_screen().get_rgba_visual()
+        if vis:
+            self.set_visual(vis)
+        self.set_decorated(False)
+        self.set_skip_taskbar_hint(True)
+        self.set_accept_focus(False)
+        self.set_keep_above(True)
+        self.set_default_size(w, h)
+        self.move(x, y)
+        self.guides = []
+        self.connect("draw", self.on_draw)
+        self.connect("realize", lambda _w: self.get_window().input_shape_combine_region(cairo.Region(), 0, 0))
+
+    def show_guides(self, guides):
+        self.guides = guides
+        if guides and not self.get_visible():
+            self.show_all()
+        elif not guides and self.get_visible():
+            self.hide()
+        self.queue_draw()
+
+    def on_draw(self, _w, cr):
+        cr.set_operator(cairo.OPERATOR_CLEAR)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        set_rgba(cr, C["acc2"], 0.95)
+        cr.set_line_width(1.5)
+        for g in self.guides:
+            if g["orient"] == "v":
+                cr.move_to(g["pos"] + 0.5, g["a"] - 8)
+                cr.line_to(g["pos"] + 0.5, g["b"] + 8)
+            else:
+                cr.move_to(g["a"] - 8, g["pos"] + 0.5)
+                cr.line_to(g["b"] + 8, g["pos"] + 0.5)
+        cr.stroke()
+        return False
+
+
+class LayoutBar(Gtk.Window):
+    """The small bar shown while arranging: add a widget, start over, or finish."""
+    W, H = 1010, 64
+
+    def __init__(self, on_add, on_reset, on_done, on_layouts=None, get_name=None, on_cancel=None, on_arrange=None,
+                 get_selected=None):
+        super().__init__(type=Gtk.WindowType.TOPLEVEL)
+        self.set_title("Kiln Layout")
+        self.get_style_context().add_class("kiln")
+        self.set_app_paintable(True)
+        vis = self.get_screen().get_rgba_visual()
+        if vis:
+            self.set_visual(vis)
+        self.set_decorated(False)
+        self.set_resizable(False)
+        self.set_skip_taskbar_hint(True)
+        self.set_keep_above(True)
+        self.set_type_hint(Gdk.WindowTypeHint.UTILITY)
+        self.on_add, self.on_reset, self.on_done = on_add, on_reset, on_done
+        self.on_layouts, self.get_name = on_layouts, get_name or (lambda: "Default")
+        self.on_cancel, self.on_arrange = on_cancel, on_arrange
+        self.get_selected = get_selected or (lambda: 0)
+        self.area = Gtk.DrawingArea()
+        self.area.set_size_request(self.W, self.H)
+        self.area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.POINTER_MOTION_MASK |
+                             Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        self.add(self.area)
+        self.hits, self.hover = [], None
+        self.area.connect("draw", self.on_draw)
+        self.area.connect("button-press-event", self.on_press)
+        self.area.connect("motion-notify-event", lambda _w, ev: self._set(self._hit(ev.x, ev.y)))
+        self.area.connect("leave-notify-event", lambda *_: self._set(None))
+        self.connect("key-press-event", lambda _w, ev: (self.on_done(), True)[-1] if ev.keyval == Gdk.KEY_Escape else False)
+        self.connect("draw", lambda _w, cr: (cr.set_operator(cairo.OPERATOR_CLEAR), cr.paint(),
+                                               cr.set_operator(cairo.OPERATOR_OVER), False)[-1])
+
+    def _hit(self, x, y):
+        return next((k for (hx, hy, w, h), k in reversed(self.hits) if hx <= x < hx + w and hy <= y < hy + h), None)
+
+    def _set(self, k):
+        if k != self.hover:
+            self.hover = k
+            self.area.queue_draw()
+
+    def on_press(self, _w, ev):
+        key = self._hit(ev.x, ev.y)
+        if key is None and ev.button == 1:
+            self.begin_move_drag(1, int(ev.x_root), int(ev.y_root), ev.time)
+        elif key == "add":
+            self.on_add(ev)
+        elif key == "layouts" and self.on_layouts:
+            self.on_layouts(ev)
+        elif key == "reset":
+            self.on_reset()
+        elif key == "cancel" and self.on_cancel:
+            self.on_cancel()
+        elif key == "arrange" and self.on_arrange:
+            self.on_arrange(ev)
+        elif key == "done":
+            self.on_done()
+        return True
+
+    def on_draw(self, _w, cr):
+        self.hits = []
+        card_bg(cr, 0, 0, self.W, self.H, 22, alpha=0.97)
+        text(cr, "Arrange your widgets", 22, 28, 14, C["text"], bold=True)
+        text(cr, "drag \u00b7 Shift+click picks several \u00b7 Alt = no snapping", 22, 49, 11, C["dim"])
+        # the layout you are editing: a click lists them, adds, renames and deletes
+        name = self.get_name()
+        probe = PangoCairo.create_layout(cr)
+        fd = Pango.FontDescription()
+        fd.set_family(FONT)
+        fd.set_absolute_size(13 * Pango.SCALE)
+        probe.set_font_description(fd)
+        probe.set_text(name, -1)
+        bw = min(230, probe.get_pixel_size()[0] + 50)
+        bx = 340
+        hot = self.hover == "layouts"
+        self.hits.append(((bx, 14, bw, 36), "layouts"))
+        rrect(cr, bx, 14, bw, 36, 11)
+        set_rgba(cr, C["ink"], 0.14 if hot else 0.07)
+        cr.fill_preserve()
+        set_rgba(cr, C["border"], 0.9)
+        cr.set_line_width(1)
+        cr.stroke()
+        text(cr, name, bx + 14, 37, 13, C["text"], maxw=bw - 40, ltr=True)
+        text(cr, "\u25be", bx + bw - 14, 37, 12, C["acc"] if hot else C["dim"], align="r")
+        x = self.W - 18
+        picked = self.get_selected()
+        for key, label, primary in (("done", "Done", True), ("cancel", "Cancel", False), ("reset", "Reset", False),
+                                    ("add", "+ Add widget", False),
+                                    ("arrange", f"Arrange ({picked})" if picked else "Arrange", False)):
+            probe = PangoCairo.create_layout(cr)
+            fd = Pango.FontDescription()
+            fd.set_family(FONT)
+            fd.set_absolute_size(13 * Pango.SCALE)
+            probe.set_font_description(fd)
+            probe.set_text(label, -1)
+            bw = probe.get_pixel_size()[0] + 28
+            x -= bw
+            hot = self.hover == key
+            self.hits.append(((x, 14, bw, 36), key))
+            rrect(cr, x, 14, bw, 36, 11)
+            set_rgba(cr, C["acc"] if primary else C["ink"], (0.95 if hot else 0.85) if primary else (0.14 if hot else 0.07))
+            cr.fill()
+            text(cr, label, x + bw / 2, 37, 13, C["on_acc"] if primary else (C["acc"] if hot else C["text"]),
+                 bold=primary, align="c")
+            x -= 8
+        return True
 
 
 def make_window(title, child, x, y, w, h, focus=False, resizable=False):
@@ -7880,7 +9134,10 @@ def make_window(title, child, x, y, w, h, focus=False, resizable=False):
     win.set_skip_pager_hint(True)
     win.set_type_hint(Gdk.WindowTypeHint.DESKTOP)
     win.stick()
-    win.add(child)
+    ov = Gtk.Overlay()                           # an edit layer can be laid over the widget (see EditLayer)
+    ov.add(child)
+    win.add(ov)
+    win._overlay = ov
     win.move(x, y)
     win.connect("draw", lambda wd, cr: (cr.set_operator(cairo.OPERATOR_CLEAR), cr.paint(),
                                           cr.set_operator(cairo.OPERATOR_OVER), False)[-1])
@@ -7956,11 +9213,19 @@ def main():
     L = compute_layout(g, mon.get_workarea())
 
     term = TerminalCard()
-    cards = Cards(term)
     focus = FocusCard()
     FOCUS_REF[0] = focus
 
-    w1 = make_window("Kiln Cards", cards, g.x + L["cards"][0], g.y + L["cards"][1], CARDS_W, CARDS_H)
+    # the Overview's cards, each in a window of its own (so each can be moved); by default they sit together as one block
+    card_views, card_wins, geo = {}, {}, {}                # geo: window key -> (x, y, w, h) of its default place
+    for sec in SECTIONS:
+        view = Cards(term, sec)
+        cx, cy, cw, ch = LAY[sec]
+        key = f"card_{sec}"
+        geo[key] = (L["cards"][0] + cx, L["cards"][1] + cy, cw, ch)
+        card_views[sec] = view
+        card_wins[sec] = make_window(f"Kiln {CARD_TITLES[sec]}", view, g.x + geo[key][0], g.y + geo[key][1], cw, ch)
+    cards = card_views["today"]                            # (the one that owns the task-entry box and the completion jobs)
     # terminal window paints its own rounded card behind the (transparent) VTE
     w2 = make_window("Kiln Terminal", term, g.x + L["term"][0], g.y + L["term"][1], TerminalCard.W, TerminalCard.H,
                      resizable=True)
@@ -7984,8 +9249,10 @@ def main():
 
     # dock cards: whatever fits in the free space of a big screen (nothing on a small one)
     cards_cfg = (CFG.get("dock") or {}).get("cards") or []
-    wanted = [k for k in DOCK_ORDER if k in cards_cfg and (k != "board" or "larkbase" in ACC.connected())
-              and (k != "vpn" or WARP[0])]
+    def dock_ok(k):
+        """Can this dock card exist here? (The Tasks card needs a connected board, the VPN card needs WARP.)"""
+        return (k != "board" or "larkbase" in ACC.connected()) and (k != "vpn" or bool(WARP[0]))
+    wanted = [k for k in DOCK_ORDER if k in cards_cfg and dock_ok(k)]
     if "board" not in wanted:                    # without a board the cards keep their older order
         wanted = [k for k in ("git", "system", "day", "notes", "tests", "services", "vpn") if k in wanted]
     specs = {k: (DOCK_MIN[k], DOCK_PREF[k]) for k in DOCK_ORDER}
@@ -7995,7 +9262,9 @@ def main():
               "notes": lambda: NotesCard(term), "tests": lambda: TestsCard(term, qbar),
               "board": lambda: BoardCard(term), "vpn": lambda: VpnCard(term)}
     dock, dock_geo, dock_card = {}, {}, {}
-    for key, dx, dy, dw in plan_dock(L, wanted, specs):
+
+    def build_dock(key, dx, dy, dw):
+        """The window of one dock card (Git, System...) at (dx, dy) of the screen, `dw` wide."""
         card = makers[key]()
         card.set_width(dw)
         dwin = make_window(f"Kiln {key.title()}", card, g.x + dx, g.y + dy, dw, DockCard.H, resizable=True)
@@ -8004,6 +9273,11 @@ def main():
         dock[key] = dwin
         dock_geo[key] = (dx, dy, dw)
         dock_card[key] = card
+        DOCK_ACTIVE.add(key)
+        return dwin
+    for key, dx, dy, dw in plan_dock(L, wanted, specs):
+        build_dock(key, dx, dy, dw)
+    default_docks = set(dock)                 # the cards that are on the Overview / beside the terminal by default (the rest can be added)
     DOCK_ACTIVE.update(dock)
     TERM_REF[0] = term
     bigboard = None
@@ -8020,12 +9294,13 @@ def main():
             return True
         return False
 
-    for w in (w1, w3, w4, w5, w6):  # not the terminal card: Ctrl+K is "kill line" there
+    for w in (*card_wins.values(), w3, w4, w5, w6):  # not the terminal card: Ctrl+K is "kill line" there
         w.connect("key-press-event", ctrl_k)
     GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR1, lambda: (launcher.toggle(), True)[1])
 
     # ---- modes: Overview (everything), Coding (terminal beside the cards), Focus (terminal only)
-    wins = dict(cards=w1, term=w2, focus=w3, music=w5, bar=w6, icons=w4)
+    wins = dict(term=w2, focus=w3, music=w5, bar=w6, icons=w4)
+    wins.update({f"card_{sec}": w for sec, w in card_wins.items()})
     wins.update({f"dock_{k}": w for k, w in dock.items()})
     if bigboard:
         bwin = make_window("Kiln Tasks", bigboard, g.x + 0, g.y + 0, 800, 600, resizable=True)
@@ -8085,12 +9360,661 @@ def main():
         if w:
             win.resize(w, h)
 
+
+    # ---- Edit layout: where the widgets are in the Overview and the Coding mode (named layouts, saved in layout.json)
+    block = {f"card_{sec}" for sec in SECTIONS if sec != "agenda" or SHOW_AGENDA}     # the default block (Coding, Tasks)
+    docks_all = {f"dock_{k}" for k in makers}
+    lay = LT.Layout(keys=set(geo) | {"term", "focus", "music", "icons"} | docks_all, prefixes=("custom_",))
+    store = WG.Widgets()                                                  # the widgets you built
+    custom = {}                                                           # id -> (window, card) of the ones that are built
+    edit = {"on": False, "mode": "overview", "layers": {}, "bar": None, "sel": set(), "magnet": True}
+    cur = {"base": {}, "default": set(), "show": set()}        # the default places / widgets of the mode on screen, and what shows
+    SIZED = {"term"} | docks_all                                          # the widgets whose size you can change
+    DOCK_TITLES = dict(git="Git", board="Tasks", system="System", notes="Notes", tests="Tests", day="Calendar",
+                       services="Services", vpn="VPN")
+    TITLES = dict({f"card_{sec}": CARD_TITLES[sec] for sec in SECTIONS}, term="Terminal", focus="Focus", music="Now playing",
+                  icons="Desktop icons", **{f"dock_{k}": f"{DOCK_TITLES[k]} card" for k in makers})
+    SCREEN = (g.width, g.height)
+
+    def register_custom(wid):
+        """Know the widget by name (the Add widget menu, the edit layer) and let it be resized."""
+        key = f"custom_{wid}"
+        TITLES[key] = (store.get(wid) or {}).get("title", "Widget")
+        SIZED.add(key)
+
+    for _w in store.items:
+        register_custom(_w["id"])
+
+    def custom_default_geo(wid):
+        n = int(wid[1:]) % 8
+        return (g.width - 380) // 2 + 28 * n, 110 + 28 * n, 380, 260
+
+    def overview_default(key):
+        """Is the widget on the Overview when you have changed nothing?"""
+        if key == "card_agenda":
+            return SHOW_AGENDA
+        if key in docks_all:
+            return key[5:] in default_docks
+        return True
+
+    def dock_default_geo(k):
+        ox, oy, ow = dock_geo.get(k, ((g.width - DOCK_PREF[k]) // 2, 80, DOCK_PREF[k]))
+        return ox, oy, ow, DockCard.H
+
+    def placed_geo(key):
+        """(x, y, w, h) of the widget in the mode on screen: your place and size, or the default, always on the screen."""
+        x, y, w, h = cur["base"].get(key) or (dock_default_geo(key[5:]) if key in docks_all else
+                                              custom_default_geo(key[7:]) if key.startswith("custom_") else geo.get(key))
+        if key in SIZED:
+            w, h = lay.size(key, (w, h))
+        x, y = lay.position(key, (x, y))
+        x, y = LT.Layout.clamp(x, y, w, h, SCREEN)
+        return x, y, w, h
+
+    def layer_for(key):
+        win = wins[key]
+        layer = edit["layers"].get(key)
+        if layer is None:
+            layer = EditLayer(win, key, TITLES[key], key in SIZED, editor)
+            win._overlay.add_overlay(layer)
+            edit["layers"][key] = layer
+        return layer
+
+    def sync_layers():
+        """While arranging: a layer on every widget that is on screen, none on the others."""
+        for key in TITLES:
+            if edit["on"] and key in wins and key in cur["show"]:
+                layer_for(key).show()
+            elif key in edit["layers"]:
+                edit["layers"][key].hide()
+
+    drag = {}                                                             # the drag in progress (see Editor.drag_start)
+    guide_win = GuideOverlay(g.x, g.y, g.width, g.height)
+
+    def rect_of(key):
+        """(x, y, w, h) of a widget's window, relative to the screen."""
+        win = wins[key]
+        w, h = win.get_size()
+        return win._pos[0] - g.x, win._pos[1] - g.y, w, h
+
+    def put(key, x, y, w, h):
+        """Move a widget's window to (x, y), keeping it on the screen, and remember the place."""
+        rx, ry = LT.Layout.clamp(int(x), int(y), w, h, SCREEN)
+        wins[key].move(g.x + rx, g.y + ry)
+        wins[key]._pos = (g.x + rx, g.y + ry)
+        lay.move(key, rx, ry)
+
+    def sync_selection():
+        for key, layer in edit["layers"].items():
+            on = key in edit["sel"]
+            if layer.selected != on:
+                layer.selected = on
+                layer.queue_draw()
+        if edit["bar"] is not None:
+            edit["bar"].area.queue_draw()
+
+    class Editor:
+        """What the edit layers call back: moving, resizing, hiding."""
+
+        # ---- moving and resizing: they stick to the other widgets, and a group moves together
+        def drag_start(self, layer):
+            sel = edit["sel"]
+            keys = [k for k in sel if k in wins] if layer.key in sel and len(sel) > 1 else [layer.key]
+            drag.clear()
+            drag.update(keys=keys, start={k: rect_of(k) for k in keys}, primary=layer.key,
+                        others=[rect_of(k) for k in cur["show"] if k in TITLES and k in wins and k not in keys
+                                and wins[k].get_visible()])
+
+        def moved(self, layer, x, y, state=0):
+            if not drag:
+                self.drag_start(layer)
+            keys, start, key0 = drag["keys"], drag["start"], drag["primary"]
+            dx, dy = (x - g.x) - start[key0][0], (y - g.y) - start[key0][1]
+            free = bool(state & Gdk.ModifierType.MOD1_MASK)                     # Alt: no snapping
+            x0, y0, x1, y1 = SN.bounds(list(start.values()))
+            guides = []
+            if edit["magnet"] and not free:
+                nx, ny, guides = SN.snap_move((x0 + dx, y0 + dy, x1 - x0, y1 - y0), drag["others"], SCREEN)
+                dx, dy = nx - x0, ny - y0
+            else:
+                dx, dy = LT.snap(x0 + dx) - x0, LT.snap(y0 + dy) - y0
+            for k in keys:
+                put(k, start[k][0] + dx, start[k][1] + dy, start[k][2], start[k][3])
+            guide_win.show_guides(guides)
+
+        def resized(self, layer, w, h, state=0):
+            key = layer.key
+            if not drag:
+                self.drag_start(layer)
+            x0, y0 = drag["start"][key][:2]
+            free = bool(state & Gdk.ModifierType.MOD1_MASK)
+            guides = []
+            if edit["magnet"] and not free:
+                w, h, guides = SN.snap_resize((x0, y0, w, h), drag["others"], SCREEN)
+            w, h = max(LT.MIN_W, LT.snap(w)), max(LT.MIN_H, LT.snap(h))
+            if key == "term":
+                term.set_size(w, h)
+            else:
+                card = custom[key[7:]][1] if key.startswith("custom_") else dock_card[key[5:]]
+                card.set_width(w)
+                card.set_height(h)
+            layer.win.resize(w, h)
+            lay.resize(key, w, h)
+            guide_win.show_guides(guides)
+
+        def finished(self, layer):
+            lay.save()
+            drag.clear()
+            guide_win.show_guides([])
+
+        def toggle_select(self, key):
+            sel = edit["sel"]
+            sel.symmetric_difference_update({key})
+            sync_selection()
+
+        def edit_widget(self, key):
+            edit_custom(key)
+
+        def layer_menu(self, layer, ev):
+            key = layer.key
+            items = [("Hide from this mode", lambda: self.hide_widget(key))]
+            if key.startswith("custom_"):
+                items = [("Edit\u2026", lambda: edit_custom(key)), (None, None)] + items + \
+                        [("Delete this widget\u2026", lambda: delete_custom(key))]
+            popup_menu(ev, items)
+
+        def script_menu(self, card, i, ev):
+            """Right click on a script of a Scripts widget."""
+            items = card.spec().get("items") or []
+            if i >= len(items):
+                return self.menu(card, ev)
+            it, edit_item = items[i], ("Edit this widget\u2026", lambda: edit_custom(f"custom_{card.wid}"))
+            if it.get("mode") == "service":
+                st = card.svc_state(i)
+                menu_items = [("Stop" if st["up"] else "Start", lambda: card.run_script(i))]
+                if st["up"]:
+                    menu_items.append(("Restart", lambda: card.svc_restart(i)))
+                menu_items.append(("Show its log\u2026", lambda: show_output(it["label"], card.svc_log(i) or "(nothing yet)")))
+            else:
+                run = card.runs.get(i) or {}
+                menu_items = [("Run in the background", lambda: card.run_script(i, "background")),
+                              ("Run in a terminal tab", lambda: card.run_script(i, "terminal"))]
+                if run.get("out"):
+                    menu_items.append(("Show its last output\u2026", lambda: show_output(it["label"], run["out"])))
+            menu_items += [(None, None), ("Copy the command", lambda: copy_text(it["command"])), (None, None), edit_item]
+            popup_menu(ev, menu_items)
+
+        def menu(self, card, ev):
+            """Right click on a widget you built (not while arranging)."""
+            key = f"custom_{card.wid}"
+            items = [("Edit\u2026", lambda: edit_custom(key))]
+            kind = card.spec()["type"]
+            if kind == "command":
+                items.append(("Run it now", card.refresh))
+            elif kind == "web":
+                items += [("Reload", lambda: card.view and card.view.reload()),
+                          ("Open in the browser", lambda: card.spec().get("url") and open_url(card.spec()["url"]))]
+            popup_menu(ev, items + [(None, None), ("Delete this widget\u2026", lambda: delete_custom(key))])
+
+        def hide_widget(self, key):
+            lay.hide(key)
+            lay.save()
+            cur["show"].discard(key)
+            edit["sel"].discard(key)
+            sync_selection()
+            wins[key].hide()
+            if key in edit["layers"]:
+                edit["layers"][key].hide()
+
+    editor = Editor()
+
+    def late_dock(k):
+        """Build a dock card that was not made at startup (you added it to a layout)."""
+        x0, y0, w0, _h = dock_default_geo(k)
+        build_dock(k, x0, y0, w0)
+        wins[f"dock_{k}"] = dock[k]
+        dock[k].show_all()
+
+    def late_custom(wid):
+        """The window of a widget you built."""
+        sp = store.get(wid)
+        if not sp or wid in custom:
+            return
+        x0, y0, w0, h0 = custom_default_geo(wid)
+        card = (WebCard if sp["type"] == "web" else CustomCard)(wid, store, term)
+        card.owner = editor
+        card.set_width(w0)
+        card.set_height(h0)
+        win = make_window(f"Kiln {sp['title']}", card, g.x + x0, g.y + y0, w0, h0, resizable=True)
+        if sp["type"] == "web":                                           # a plain box: its window paints the card behind it
+            win.connect("draw", lambda _w, cr, c=card: (card_bg(cr, 0, 0, c.W, c.H, 20), False)[-1])
+        custom[wid] = (win, card)
+        wins[f"custom_{wid}"] = win
+        win.show_all()
+
+    def show_output(title, out):
+        d = Gtk.MessageDialog(transient_for=dialog_parent(), modal=True, message_type=Gtk.MessageType.INFO,
+                              buttons=Gtk.ButtonsType.CLOSE, text=title)
+        tv = Gtk.TextView()
+        tv.set_editable(False)
+        tv.set_monospace(True)
+        tv.get_buffer().set_text(out)
+        sw = Gtk.ScrolledWindow()
+        sw.set_size_request(560, 260)
+        sw.add(tv)
+        d.get_message_area().pack_start(sw, True, True, 6)
+        d.show_all()
+        d.run()
+        d.destroy()
+
+    def current_mode():
+        return edit["mode"] if edit["on"] else (state["mode"] if lay.free(state["mode"]) else "overview")
+
+    def new_custom(wtype):
+        fields = widget_dialog(wtype, parent=dialog_parent())
+        if fields is None:
+            return
+        try:
+            wid = store.add(wtype, **fields)
+        except ValueError as exc:
+            notice(str(exc).capitalize() + ".")
+            return
+        store.save()
+        register_custom(wid)
+        add_widget(f"custom_{wid}")
+
+    def edit_custom(key):
+        wid = key[7:]
+        sp = store.get(wid)
+        if not sp:
+            return
+        fields = widget_dialog(sp["type"], sp, parent=dialog_parent())
+        if fields is None:
+            return
+        store.update(wid, **fields)
+        store.save()
+        register_custom(wid)
+        if wid in custom:
+            custom[wid][1].apply()
+            custom[wid][0].set_title(f"Kiln {store.get(wid)['title']}")
+        if key in edit["layers"]:
+            edit["layers"][key].title = TITLES[key]
+            edit["layers"][key].queue_draw()
+
+    def delete_custom(key):
+        wid = key[7:]
+        sp = store.get(wid)
+        if not sp:
+            return
+        d = Gtk.MessageDialog(transient_for=dialog_parent(), modal=True, message_type=Gtk.MessageType.QUESTION,
+                              buttons=Gtk.ButtonsType.NONE, text=f"Delete \u201c{sp['title']}\u201d?")
+        d.format_secondary_text("The widget and its content are removed from every layout.")
+        d.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Delete", Gtk.ResponseType.OK)
+        d.set_default_response(Gtk.ResponseType.CANCEL)
+        ok = d.run() == Gtk.ResponseType.OK
+        d.destroy()
+        if not ok:
+            return
+        store.delete(wid)
+        store.save()
+        lay.forget(key)
+        lay.save()
+        TITLES.pop(key, None)
+        SIZED.discard(key)
+        if wid in custom:
+            win, _card = custom.pop(wid)
+            wins.pop(key, None)
+            layer = edit["layers"].pop(key, None)
+            if layer is not None:
+                layer.destroy()
+            cur["show"].discard(key)
+            win.destroy()
+        apply_mode(current_mode())
+        sync_layers()
+
+    def add_widget(key):
+        if key.startswith("dock_") and key[5:] not in dock:
+            late_dock(key[5:])
+        if key.startswith("custom_"):
+            late_custom(key[7:])
+        x, y = cur["base"].get(key, dock_default_geo(key[5:]) if key in docks_all else
+                               custom_default_geo(key[7:]) if key.startswith("custom_") else geo.get(key))[:2]
+        lay.show(key, default_hidden=key not in cur["default"], pos=(x, y) if not lay.get(key).get("x") else None)
+        lay.save()
+        apply_mode(current_mode())
+        wins[key].show_all()
+        sync_layers()
+        wins[key].present()
+
+    NATIVE = {"card_strip": ("Prayer times", "The clock, the Hijri date and the five prayer times.", "moon"),
+              "card_today": ("Today", "Your tasks for the day from every connected app.", "check-circle"),
+              "card_agenda": ("Agenda", "Today's meetings from your calendars.", "calendar"),
+              "card_github": ("GitHub", "Notifications, pull requests and your contributions.", "github"),
+              "card_projects": ("Projects", "Your project folders and the git state of each.", "folder"),
+              "term": ("Terminal", "A real terminal with tabs, splits and grey suggestions.", "bolt"),
+              "focus": ("Focus timer", "A Pomodoro timer for deep work.", "timer"),
+              "music": ("Now playing", "YouTube Music: what plays and its controls.", "music"),
+              "icons": ("Desktop icons", "Your folders and files on the desktop.", "folder"),
+              "dock_git": ("Git", "Changes and recent commits of the project.", "git-branch"),
+              "dock_board": ("Tasks", "Your Lark Base board by status.", "check-circle"),
+              "dock_system": ("System", "CPU, memory, disk and network.", "cpu"),
+              "dock_notes": ("Notes", "A scratch pad that belongs to the project.", "check"),
+              "dock_tests": ("Tests", "Run the project's tests and read the output.", "check-circle"),
+              "dock_day": ("Calendar", "The month, the Hijri date and the prayer times.", "calendar"),
+              "dock_services": ("Running", "Dev servers and containers running now.", "bolt"),
+              "dock_vpn": ("VPN", "Cloudflare WARP: on or off, latency, traffic.", "lock")}
+
+    class GalleryCtl:
+        """What the widget gallery asks for and tells (see gallery.py)."""
+
+        @staticmethod
+        def title():
+            return lay.title(current_mode())
+
+        @staticmethod
+        def entries():
+            out = []
+            for key in TITLES:
+                if key.startswith("custom_"):
+                    sp = store.get(key[7:]) or {}
+                    out.append(dict(key=key, title=sp.get("title", "Widget"), group="mine", on=key in cur["show"], ok=True,
+                                    desc=WG.DESCRIPTIONS.get(sp.get("type"), ""), icon=WG.ICONS.get(sp.get("type"), "folder")))
+                elif key in NATIVE:
+                    name, desc, icon = NATIVE[key]
+                    ok, reason = True, ""
+                    if key == "dock_board" and "larkbase" not in ACC.connected():
+                        ok, reason = False, "Connect a Lark Base board in Settings \u2192 Accounts first."
+                    elif key == "dock_vpn" and not WARP[0]:
+                        ok, reason = False, "Cloudflare WARP (warp-cli) is not installed."
+                    out.append(dict(key=key, title=name, desc=desc, icon=icon, group="native", on=key in cur["show"],
+                                    ok=ok, reason=reason))
+            out.sort(key=lambda e: (e["group"], e["title"].lower()))
+            return out
+
+        @staticmethod
+        def kinds():
+            return [dict(key=t, title=WG.TYPES[t], desc=WG.DESCRIPTIONS[t], icon=WG.ICONS[t]) for t in WG.TYPES]
+
+        @staticmethod
+        def toggle(key):
+            if key in cur["show"]:
+                editor.hide_widget(key)
+            else:
+                add_widget(key)
+
+        @staticmethod
+        def create(kind):
+            new_custom(kind)
+
+        @staticmethod
+        def edit(key):
+            edit_custom(key)
+
+        @staticmethod
+        def duplicate(key):
+            sp = store.get(key[7:])
+            if sp:
+                fields = {k: v for k, v in sp.items() if k not in ("id", "type", "title")}
+                wid = store.add(sp["type"], f"{sp['title'][:WG.MAX_TITLE - 7]} (copy)", **fields)
+                store.save()
+                register_custom(wid)
+
+        @staticmethod
+        def delete(key):
+            delete_custom(key)
+
+        @staticmethod
+        def closed():
+            if edit["bar"] is not None and edit["on"]:
+                edit["bar"].present()
+
+    gallery = {"win": None}
+
+    def open_gallery(_ev=None):
+        if gallery["win"] is None:
+            gallery["win"] = GAL.Gallery(GalleryCtl)
+        win = gallery["win"]
+        bar = edit["bar"]
+        bx, by = bar.get_position() if bar is not None and bar.get_visible() else (g.x + (g.width - win.W) // 2, g.y + 70)
+        win.popup(g.x + max(8, (g.width - win.W) // 2), by + LayoutBar.H + 12)
+
+    def apply_places(places):
+        """Move widgets to {key: (x, y)} (what Align, Distribute and Line up work out) and remember it."""
+        for key, (x, y) in places.items():
+            _x0, _y0, w, h = rect_of(key)
+            put(key, x, y, w, h)
+        lay.save()
+
+    def arrange_menu(ev):
+        sel = [k for k in edit["sel"] if k in wins and k in cur["show"]]
+        rects = {k: rect_of(k) for k in sel}
+        items = []
+        if len(sel) >= 2:
+            for label, how in (("Align left", "left"), ("Align horizontal centres", "hcenter"), ("Align right", "right"),
+                               ("Align top", "top"), ("Align vertical centres", "vcenter"), ("Align bottom", "bottom")):
+                items.append((label, lambda how=how: apply_places(SN.align(rects, how))))
+            items.append((None, None))
+            if len(sel) >= 3:
+                items += [("Space evenly, left to right", lambda: apply_places(SN.distribute(rects, "h"))),
+                          ("Space evenly, top to bottom", lambda: apply_places(SN.distribute(rects, "v")))]
+            items += [("Line up in a row", lambda: apply_places(SN.line_up(rects, "row"))),
+                      ("Stack in a column", lambda: apply_places(SN.line_up(rects, "column"))), (None, None),
+                      ("Select none", lambda: (edit["sel"].clear(), sync_selection()))]
+        else:
+            items.append(("Shift+click widgets to pick several", lambda: None))
+        items += [(None, None), ("Select all", lambda: (edit["sel"].update(k for k in cur["show"] if k in wins and k in TITLES),
+                                                        sync_selection())),
+                  (("\u2713  " if edit["magnet"] else "      ") + "Stick to the other widgets",
+                   lambda: edit.update(magnet=not edit["magnet"]))]
+        popup_menu(ev, items)
+
+    def reset_layout():
+        lay.reset()
+        lay.save()
+        apply_mode(edit["mode"])
+        sync_layers()
+
+    # -- the views in the work bar: new, rename, hide, show, delete
+    def dialog_parent():
+        win = gallery["win"]
+        if win is not None and win.get_visible():
+            return win
+        return edit["bar"] if edit["bar"] is not None and edit["bar"].get_visible() else None
+
+    def notice(text):
+        d = Gtk.MessageDialog(transient_for=dialog_parent(), modal=True, message_type=Gtk.MessageType.INFO,
+                              buttons=Gtk.ButtonsType.OK, text=text)
+        d.run()
+        d.destroy()
+
+    def ask_name(title, initial, done):
+        d = Gtk.MessageDialog(transient_for=dialog_parent(), modal=True, message_type=Gtk.MessageType.QUESTION,
+                              buttons=Gtk.ButtonsType.OK_CANCEL, text=title)
+        entry = Gtk.Entry()
+        entry.set_text(initial)
+        entry.set_max_length(LT.MAX_NAME)
+        entry.set_activates_default(True)
+        d.set_default_response(Gtk.ResponseType.OK)
+        d.get_message_area().pack_start(entry, False, False, 6)
+        d.show_all()
+        entry.grab_focus()
+        ok = d.run() == Gtk.ResponseType.OK
+        name = entry.get_text()
+        d.destroy()
+        if ok:
+            try:
+                done(name)
+            except ValueError as exc:
+                notice(str(exc).capitalize() + ".")
+
+    def tasks_view():
+        return bool(bigboard)
+
+    def view_labels():
+        """[(id, label)] of the buttons of the work bar."""
+        return [(v, lay.title(v)) for v in lay.visible_views(tasks=tasks_view())]
+
+    def views_changed():
+        lay.save()
+        qbar.queue_draw()
+        if edit["bar"] is not None:
+            edit["bar"].area.queue_draw()
+
+    def free_view():
+        """The view a new one is copied from: the one you are on if it can be arranged, else the Overview."""
+        return state["mode"] if lay.free(state["mode"]) else "overview"
+
+    def new_view(copy_from=None):
+        copy_from = copy_from if copy_from and lay.free(copy_from) else free_view()
+        ask_name(f"Name the new view (a copy of \u201c{lay.title(copy_from)}\u201d)", "",
+                 lambda n: (lambda vid: (views_changed(), apply_mode(vid)))(lay.create_view(n, copy_from)))
+
+    def rename_view(view):
+        ask_name("Rename this view", lay.title(view),
+                 lambda n: (lay.rename_view(view, n), views_changed()))
+
+    def hide_view(view):
+        """Take the view out of the list of the work bar (it is kept; "Show" brings it back)."""
+        try:
+            lay.hide_view(view, tasks=tasks_view())
+        except ValueError:
+            notice("Keep at least one view in the list.")
+            return
+        views_changed()
+        if state["mode"] == view:                                        # you are on it: go to the first one that is left
+            apply_mode(lay.visible_views(tasks=tasks_view())[0])
+
+    def show_view(view):
+        lay.show_view(view)
+        views_changed()
+        apply_mode(view)
+
+    def delete_view(view):
+        if view not in lay.custom:
+            return
+        d = Gtk.MessageDialog(transient_for=dialog_parent(), modal=True, message_type=Gtk.MessageType.QUESTION,
+                              buttons=Gtk.ButtonsType.NONE, text=f"Delete the view \u201c{lay.title(view)}\u201d?")
+        d.format_secondary_text("Where its widgets are is forgotten (the widgets themselves stay). "
+                                "To keep it, hide it instead.")
+        d.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Delete", Gtk.ResponseType.OK)
+        d.set_default_response(Gtk.ResponseType.CANCEL)
+        ok = d.run() == Gtk.ResponseType.OK
+        d.destroy()
+        if not ok:
+            return
+        was_on = state["mode"] == view
+        if edit["on"] and edit["mode"] == view:
+            stop_edit()
+        lay.delete_view(view)
+        views_changed()
+        if was_on:
+            apply_mode("overview")
+
+    def reorder_view(view, before):
+        lay.move_view(view, before)
+        views_changed()
+
+    def view_items(view):
+        """The menu of a view: move, rename, hide, delete (yours), new, and the hidden ones to show again."""
+        items = []
+        left, right = lay.neighbours(view, tasks=tasks_view())
+        if left:
+            items.append(("Move left", lambda: reorder_view(view, left)))
+        if right:
+            vis = lay.visible_views(tasks=tasks_view())
+            after = vis[vis.index(right) + 1] if vis.index(right) + 1 < len(vis) else None
+            items.append(("Move right", lambda: reorder_view(view, after)))
+        if items:
+            items.append((None, None))
+        if view in lay.custom:
+            items.append(("Rename\u2026", lambda: rename_view(view)))
+        if len(lay.visible_views(tasks=tasks_view())) > 1 and view not in lay.hidden_views:
+            items.append((f"Hide \u201c{lay.title(view)}\u201d", lambda: hide_view(view)))
+        if view in lay.custom:
+            items.append(("Delete\u2026", lambda: delete_view(view)))
+        items += [(None, None), ("New view\u2026", lambda: new_view(view))]
+        hidden_ = lay.hidden_list(tasks=tasks_view())
+        if hidden_:
+            items += [(None, None)] + [(f"Show \u201c{lay.title(v)}\u201d", lambda v=v: show_view(v)) for v in hidden_]
+        return items
+
+    def layouts_menu(ev):
+        """The name button of the edit bar."""
+        popup_menu(ev, view_items(edit["mode"]))
+
+    def grid_menu(ev):
+        items = [("Edit layout" if not edit["on"] else "Finish editing", qbar.on_layout),
+                 ("Widgets\u2026", open_gallery), (None, None)]
+        popup_menu(ev, items + view_items(state["mode"]))
+
+    def start_edit():
+        mode = state["mode"] if lay.free(state["mode"]) else "overview"
+        edit.update(on=True, mode=mode, snap=lay.snapshot())
+        apply_mode(mode)
+        if edit["bar"] is None:
+            edit["bar"] = LayoutBar(open_gallery, reset_layout, stop_edit, layouts_menu, lambda: lay.title(edit["mode"]),
+                                    cancel_edit, arrange_menu, lambda: len(edit["sel"]))
+        sync_layers()
+        bar = edit["bar"]
+        bar.move(g.x + (g.width - LayoutBar.W) // 2, g.y + max(8, ex["top"] - 56))
+        bar.show_all()
+        bar.present()
+        qbar.editing = True
+        qbar.queue_draw()
+
+    def stop_edit(keep=True):
+        if not edit["on"]:
+            return
+        edit["on"] = False
+        edit["sel"].clear()
+        sync_selection()
+        guide_win.show_guides([])
+        if keep:
+            lay.save()
+        for layer in edit["layers"].values():
+            layer.hide()
+        if edit["bar"]:
+            edit["bar"].hide()
+        if gallery["win"] is not None:
+            gallery["win"].hide()
+        qbar.editing = False
+        qbar.queue_draw()
+
+    def cancel_edit():
+        """Leave the edit mode and put everything back as it was when you started (the widgets you made stay in
+        "My widgets", they just are not on the view any more)."""
+        mode = edit["mode"]
+        lay.restore(edit["snap"])
+        lay.use_mode(mode)
+        stop_edit(keep=False)
+        lay.save()
+        apply_mode(state["mode"] if lay.exists(state["mode"]) else "overview")
+        qbar.queue_draw()
+
+    qbar.on_layout = lambda: stop_edit() if edit["on"] else start_edit()
+    qbar.on_layout_menu = grid_menu
+    qbar.views = view_labels
+    qbar.on_view_menu = lambda ev, view: popup_menu(ev, view_items(view))
+    qbar.on_new_view = lambda: new_view()
+    qbar.on_reorder = reorder_view
+
     def apply_mode(name, remember=True):
         t_start = time.time()
-        name = name if name in MODES and (name != "tasks" or bigboard) else "overview"
+        name = name if lay.exists(name) and (name != "tasks" or bigboard) else "overview"
+        if edit["on"] and name != edit["mode"]:
+            stop_edit()
         state["mode"] = name
+        placed = lay.free(name)                                          # Overview, Coding and the views you made are arranged by you
+        if placed:
+            lay.use_mode(name)
+            for k in makers:                                             # cards you added to this mode are built when needed
+                if f"dock_{k}" in docks_all and k not in dock and lay.added(f"dock_{k}") and dock_ok(k):
+                    late_dock(k)
+            for w_ in store.items:                                       # ...and so are the widgets you built
+                if lay.added(f"custom_{w_['id']}") and w_["id"] not in custom:
+                    late_custom(w_["id"])
         top, gap, bar_y, left = ex["top"], ex["gap"], ex["bar_y"], ex["left"]
-        side = [k for k in ("git", "board", "tests", "notes") if k in dock]       # the project's own cards
+        side = [k for k in ("git", "board", "tests", "notes") if k in default_docks]       # the project's own cards
         arrange = {}                                                     # dock card -> (x, y, w, h)
         veil = False
         term.alpha, pt = 0.80, 11
@@ -8098,7 +10022,7 @@ def main():
             tx = left + CARDS_W + gap
             avail = ex["W"] - tx - ex["right"]
             tw, th = min(avail, 2000), bar_y - gap - top
-            ty, show = top, {"cards", "term", "bar"}
+            ty, show = top, set(block) | {"term", "bar"}
             if side and avail >= 1500:                                   # Git, Tests and Notes beside the terminal
                 tw = max(1100, int(avail * 0.60))
                 cx, cw = tx + tw + gap, avail - tw - gap
@@ -8118,28 +10042,58 @@ def main():
             bigboard.set_height(bh_)
             place(wins["boardview"], bx, top, bw_, bh_)
             (tx, ty), (tw, th) = L["term"], ex["term0"]
-            show = {"cards", "boardview", "bar"}
+            show = set(block) | {"boardview", "bar"}
         elif name == "books":
             bw_, bh_ = ex["W"] - left - ex["right"], bar_y - gap - top
             books.set_size(bw_, bh_)
             place(wins["booksview"], left, top, bw_, bh_)
             (tx, ty), (tw, th) = L["term"], ex["term0"]
             show = {"booksview", "bar"}
-        else:
+        else:                                                            # Overview: your own layout
             (tx, ty), (tw, th) = L["term"], ex["term0"]
-            show = set(wins) - {"boardview", "booksview"}
+            show = {k for k in wins if k not in ("boardview", "booksview") and overview_default(k)}
+        if placed:                                                       # the default places, then yours on top of them
+            base = {key: geo[key] for key in geo}
+            base["term"] = (tx, ty, tw, th)
+            base["focus"] = (*L["focus"], FocusCard.W, FocusCard.H)
+            base["music"] = (*L["music"], NowPlaying.W, NowPlaying.H)
+            base["icons"] = (*L["icons"], ICONS_W, ICONS_H)
+            for k in makers:
+                ox, oy, ow, oh = dock_default_geo(k)
+                base[f"dock_{k}"] = arrange.get(k, (ox, oy, ow, oh))
+            for w_ in store.items:
+                base[f"custom_{w_['id']}"] = custom_default_geo(w_["id"])
+            cur["base"], cur["default"] = base, set(show) & set(TITLES)
+            show = (show - set(TITLES)) | {k for k in TITLES if k in wins and lay.visible(k, k in cur["default"])}
+            cur["show"] = set(show)
+            tx, ty, tw, th = placed_geo("term")
         term.set_size(tw, th)
         term.set_font_pt(pt)
         place(w2, tx, ty, tw, th)
         w2.set_visible("term" in show)
         w2.queue_draw()
+        for sec, cwin in card_wins.items():                              # the cards: the block, or where you put them
+            cx_, cy_ = (placed_geo(f"card_{sec}") if placed else geo[f"card_{sec}"])[:2]
+            place(cwin, cx_, cy_)
+        if placed:
+            for key in ("focus", "music", "icons"):
+                place(wins[key], *placed_geo(key)[:2])
         for key, dwin in dock.items():                                   # cards go back to their own spots
             card = dock_card[key]
-            ox, oy, ow = dock_geo[key]
-            x, y, w_, h_ = arrange.get(key, (ox, oy, ow, DockCard.H))
+            if placed:
+                x, y, w_, h_ = placed_geo(f"dock_{key}")
+            else:
+                ox, oy, ow = dock_geo[key]
+                x, y, w_, h_ = arrange.get(key, (ox, oy, ow, DockCard.H))
             card.set_width(w_)
             card.set_height(h_)
             place(dwin, x, y, w_, h_)
+        if placed:
+            for wid, (cwin, ccard) in custom.items():
+                x, y, w_, h_ = placed_geo(f"custom_{wid}")
+                ccard.set_width(w_)
+                ccard.set_height(h_)
+                place(cwin, x, y, w_, h_)
         for key, win in wins.items():
             if key != "term":
                 win.set_visible(key in show)
@@ -8181,11 +10135,22 @@ def main():
             if not words:
                 continue
             if words[0] == "mode":
-                want = words[1] if len(words) > 1 else "next"
+                want = line.split(None, 1)[1].strip() if len(words) > 1 else "next"
                 if want == "next":
-                    avail = [m for m in MODES if m != "tasks" or bigboard]      # (Books is always there)
+                    avail = lay.visible_views(tasks=tasks_view())
                     want = avail[(avail.index(state["mode"]) + 1) % len(avail)] if state["mode"] in avail else "overview"
-                apply_mode(want)
+                else:
+                    want = lay.find(want)                                # an id or the name of a view, any case
+                if want:
+                    apply_mode(want)
+            elif words[0] == "layout":
+                qbar.on_layout()
+            elif words[0] == "gallery":
+                if not edit["on"]:
+                    start_edit()
+                open_gallery()
+            elif words[0] == "debug":
+                term.debug_report()
             elif words[0] == "test" and qbar.proj:
                 qbar.run_tests(qbar.proj["path"])
         return False
@@ -8202,7 +10167,7 @@ def main():
         return False
     for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
         GLib.unix_signal_add(GLib.PRIORITY_HIGH, sig, on_stop, sig.name)
-    for w in (w1, w2, w3, w4, w5, w6, *dock.values()):
+    for w in (*card_wins.values(), w2, w3, w4, w5, w6, *dock.values()):
         w.show_all()
     cards.entry.hide()
     try:
@@ -8237,21 +10202,19 @@ def main():
     GLib.timeout_add_seconds(every(120), lambda: (refresh("accounts"), True)[1])
 
     def tick():
-        cards.metrics.sample()
-        cards.push_history()
         cards.poll_jobs()
         TL.sync_with_board((accounts_data().get("larkbase") or {}).get("tasks"))     # done elsewhere: stop the clock
         for p in list(_procs):
             if p.poll() is not None:
                 _procs.remove(p)
-        cards.area.queue_draw()
+        for view in card_views.values():
+            view.area.queue_draw()
         qbar.queue_draw()
         return True
 
     enforce_dock_position()
     schedule_update_checks()
     GLib.timeout_add_seconds(20, report_perf)
-    cards.metrics.sample()
     GLib.timeout_add_seconds(every(2), tick)
     GLib.timeout_add_seconds(every(60), lambda: (icons.queue_draw(), True)[1])      # keeps the "recent" dots fresh
     Gtk.main()
