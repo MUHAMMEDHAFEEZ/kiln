@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.5.0 (2026-11-19)
+
+The desktop is yours to arrange: your own **views**, a **widget gallery**, widgets you build (scripts that start and stop programs, web pages, notes...), tidy dragging, a prayer-times card, and a terminal whose suggestions work and whose Ctrl+V pastes.
+
 * **Scripts widget as a control panel**: besides commands that run once, an entry can **keep running**: **Start / Stop**, a green dot
   and its uptime, a log, Restart, a stop command of your own (or SIGTERM then SIGKILL, to the whole group, so what it started
   stops too), a check command for programs started some other way (docker, systemd), and a folder to run in. A program Kiln
@@ -38,11 +41,6 @@
   Saved in `~/.config/kiln/layout.json`. See `docs/LAYOUT.md`.
 * The top-left card is now the **clock with the five prayer times**, the Hijri date and the next prayer (CPU and RAM moved to
   the System card).
-
-## 1.4.1 (2026-11-19)
-
-The terminal's suggestions work with the shell's VTE integration, Ctrl+V pastes, and books can be moved to the Trash.
-
 * **Terminal**: **Ctrl+V pastes** (Arabic text too, on any keyboard layout; copied files paste their paths); `terminal.ctrl_v_paste`.
 * Fixed: the grey suggestions never appeared when the shell's own VTE integration ran (the window title it writes hid Kiln's
   "prompt is showing" mark). The mark is now the end of the prompt itself. Commands Kiln types itself (switching to a task's
