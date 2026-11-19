@@ -61,6 +61,7 @@ class BoardDragTests(unittest.TestCase):
         cls.real_move = staticmethod(app.move_task)
         app.move_task = lambda t, k: cls.moves.append((t["title"], k))
         app.open_url = lambda u: cls.opened.append(u)
+        app.show_task = lambda t, ev=None, redraw=None, complete=None: cls.opened.append("details:" + t["title"])
         cls.view = app.BoardView(None)
         cls.view.set_width(1500)
         cls.view.set_height(800)
@@ -118,11 +119,12 @@ class BoardDragTests(unittest.TestCase):
         v._motion(v, self.motion(to_x, to_y))
         v._release(v, self.btn("release", to_x, to_y))
 
-    def test_a_plain_click_opens_the_task(self):
+    def test_a_plain_click_shows_the_task_details_not_the_web(self):
         v, (x, y) = self.view, self.center(("card", "todo", 0))
         v._on_press(v, self.btn("press", x, y))
         v._release(v, self.btn("release", x, y))
-        self.assertEqual(self.opened, ["https://example.test/1"])
+        self.assertEqual(len(self.opened), 1)
+        self.assertTrue(self.opened[0].startswith("details:"))          # nothing went to the browser
         self.assertEqual(self.moves, [])
 
     def test_a_small_wobble_is_still_a_click(self):

@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+* **Task details window**: a click on a task (board, Tasks mode, the Today card) opens a window on the desktop first, not the
+  browser. It shows the status, priority, project, department, who it is assigned to, start date and deadline ("in 3 days",
+  overdue in red), time spent, attachments, the **description** (Arabic text reads right to left), the progress notes and
+  the LINK column, with the actions beside them: Start working / Stop timer, Mark completed, move to another status,
+  **Open in Lark ↗**, Copy link, Copy description. Every task you open is a **tab**; drag the window by any empty part,
+  scroll a long description (wheel, PageUp/PageDown), Ctrl+Tab switches tabs, Esc closes the tab. It stays open until you close it.
+* **Terminal suggestions**: grey text after your cursor, like fish. It comes from your history (this folder first, then
+  what you use most and last), then from the project: `package.json` scripts, Makefile targets, git branches and
+  subcommands, folders for `cd`, Docker and Django commands, the usual commands of Go, Rust, Python and compose projects,
+  a built-in list of everyday commands and the programs on your PATH, so an empty history still gets suggestions. **Tab** or **→** takes it, **Ctrl+→** one word, **Esc** hides it.
+  **Ctrl+Space** asks an AI to finish the line, and  `# find files over 100 MB`  followed by Ctrl+Space turns a request into a
+  command (Tab puts it on the line; nothing runs until you press Enter). The AI is a local model through Ollama; Claude is
+  an option. Nothing is sent unless you ask. Commands that look like they hold a password, key or token are never
+  remembered, suggested or sent. `terminal.suggestions`, Settings → Desktop. See `docs/TERMINAL.md`.
+* Terminal, from kitty: **Ctrl+C** copies when text is selected and interrupts otherwise, **Ctrl+F** searches the terminal
+  (Ctrl+Shift+F anywhere), **PageUp / PageDown** scroll the history at the prompt, **Ctrl +/-/0** change the text size, and
+  a **cursor trail** follows the cursor when it jumps (`terminal.cursor_trail`).
+* **New task** takes pictures and files: *Add…*, drop them on the window or paste a picture with Ctrl+V. Pictures go to the
+  table's Images column, other files to DOCS (`images_field`, `files_field`). `kiln newtask --image shot.png`. Needs
+  `lark-cli auth login --scope "docs:document.media:upload"` once. If only the upload fails the task is kept and
+  *Retry upload* appears.
+* **VPN**: a Cloudflare WARP chip in the work bar (click to switch on or off, right-click for details) and an optional
+  **VPN** card with latency, loss, traffic and mode. Needs `warp-cli`. `vpn.chip`, `dock.cards`.
+* The work bar's Running section no longer shows only a number for servers that do not fit: **+N more ▾** opens the list
+  (click a dev server to open it).
+
 ## 1.3.0 (2026-11-15)
 
 A big release: a **Books mode** with a PDF library and an open-book reader, a Lark Base tasks board with a Tasks mode, time tracking,

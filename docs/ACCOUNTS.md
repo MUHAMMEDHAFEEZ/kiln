@@ -94,6 +94,12 @@ on a completed task it reopens it), or right-click for *Move to…*. Statuses ar
 department, who it is for, a due date and a note; `kiln newtask` opens the same window, and
 `kiln newtask --title "Fix login" --list SHOP --priority Important --yes` adds a task without one.
 
+**Pictures and files**: the window has *Add…*, drag-and-drop and Ctrl+V for a picture on the clipboard. Pictures go to the
+table's `Images` column and other files to `DOCS` (change the names with `images_field` / `files_field` in the service's
+details); `kiln newtask --image shot.png --image spec.pdf` does the same without a window. Uploading needs one more
+permission: `lark-cli auth login --scope "docs:document.media:upload"`. If the task is created but the upload fails, the
+window stays open with *Retry upload*, so the task is not added twice.
+
 The **Tasks** mode (the last chip of the mode switcher, or `kiln mode tasks`) fills the screen with the board: three status
 columns, a card per task, a progress bar and the tabs. Ticking a Lark Base task off in the **Today** card completes it in the Base.
 

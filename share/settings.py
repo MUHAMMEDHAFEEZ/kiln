@@ -39,7 +39,9 @@ DEFAULTS = {
     "prayer": {"enabled": False, "method": "mwl", "asr": "standard", "language": "en"},
     "now_playing": {"youtube_music_only": False},
     "lock_screen": {"widgets": True, "brightness": 0.72, "blur": 0},
-    "terminal": {"project_commands": True, "system_input_method": False},
+    "terminal": {"project_commands": True, "system_input_method": False, "cursor_trail": True,
+                 "suggestions": {"enabled": True, "ai": "auto", "model": "", "auto_ai": False}},
+    "vpn": {"chip": True},
     "books": {"dirs": ["~/Books"], "theme": "auto", "daily_goal_minutes": 20, "eye_break_minutes": 30, "view": "book", "covers": "auto"},
     "modes": {"focus_mutes_notifications": True, "focus_dim": True},
     "icons": {"recent_dot": True, "recent_hours": 48},
@@ -496,15 +498,36 @@ class Settings(Gtk.Window):
                                  ("notes", "Notes", "A scratchpad for each project, and a global one."),
                                  ("board", "Tasks board", "A Lark Base table as tabs, like your projects and yours (connect it under Accounts)."),
                                  ("tests", "Tests", "Result and output of the last test run, with a run button."),
-                                 ("services", "Running", "Dev servers and containers (the work bar already shows them).")):
+                                 ("services", "Running", "Dev servers and containers (the work bar already shows them)."),
+                                 ("vpn", "VPN", "Cloudflare WARP: switch it on and off, latency, loss and traffic (needs warp-cli).")):
             sw = Gtk.Switch(active=key in self.cfg["dock"]["cards"])
             sw.connect("notify::active", lambda s_, _p, k=key: self.toggle_dock(k, s_.get_active()))
             box.pack_start(self.row(title, sw, hint), False, False, 0)
         box.pack_start(label("Desktop behaviour", "kiln-section"), False, False, 0)
+        box.pack_start(self.switch("vpn.chip", "VPN chip in the work bar",
+                                   "A Cloudflare WARP chip next to Running: click to switch it on or off "
+                                   "(needs warp-cli; restart Kiln to apply)."), False, False, 0)
         box.pack_start(self.switch("terminal.project_commands", "Terminal buttons from the project",
                                    "The buttons under the terminal come from the project's own files "
                                    "(package.json scripts, Makefile, manage.py, Cargo, Go, Flutter...)."),
                        False, False, 0)
+        box.pack_start(self.switch("terminal.suggestions.enabled", "Command suggestions",
+                                   "Grey text after your cursor from your history and the project (Tab or \u2192 takes it, "
+                                   "Ctrl+\u2192 one word, Esc hides it). Commands that look like they hold a password or key "
+                                   "are never remembered. Applies after a restart."), False, False, 0)
+        ai = Gtk.ComboBoxText()
+        for k, n in (("auto", "Automatic (a local model if Ollama is running)"), ("ollama", "Local model (Ollama)"),
+                     ("claude", "Claude (sends the line you typed to Anthropic)"), ("off", "Off")):
+            ai.append(k, n)
+        ai.set_active_id(self.cfg["terminal"].get("suggestions", {}).get("ai", "auto"))
+        ai.connect("changed", lambda c: self.set("terminal.suggestions.ai", c.get_active_id()))
+        box.pack_start(self.row("AI for suggestions", ai,
+                                "Ctrl+Space asks it to finish the line; type  # find files over 100 MB  and press Ctrl+Space to "
+                                "get the command. Nothing is sent until you ask (unless the next switch is on)."), False, False, 0)
+        box.pack_start(self.switch("terminal.suggestions.auto_ai", "Ask the AI as I type",
+                                   "After a pause, when history has nothing. Slower on weak computers."), False, False, 0)
+        box.pack_start(self.switch("terminal.cursor_trail", "Cursor trail",
+                                   "A short comet behind the cursor when it jumps."), False, False, 0)
         box.pack_start(self.switch("terminal.system_input_method", "Terminal uses the system input method",
                                    "Off is faster typing. Turn it on only if you type Chinese, Japanese, Korean or "
                                    "another language that needs an input-method engine. Applies after a restart."),
@@ -621,7 +644,7 @@ class Settings(Gtk.Window):
             run_quiet("gsettings", "set", "org.gnome.shell.extensions.dash-to-dock", "dock-position", pos.upper())
 
     def toggle_dock(self, key, on):
-        order = ["git", "board", "system", "day", "notes", "tests", "services"]
+        order = ["git", "board", "system", "day", "notes", "tests", "services", "vpn"]
         cards = {c for c in self.cfg["dock"]["cards"] if c != key}
         if on:
             cards.add(key)

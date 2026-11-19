@@ -24,7 +24,9 @@ All settings live in **`~/.config/kiln/config.json`**. Open it with `kiln config
   "now_playing": { "youtube_music_only": false },
   "lock_screen": { "widgets": true, "brightness": 0.72, "blur": 0 },
 
-  "terminal": { "project_commands": true, "system_input_method": false },
+  "terminal": { "project_commands": true, "system_input_method": false, "cursor_trail": true,
+                "suggestions": { "enabled": true, "ai": "auto", "model": "", "auto_ai": false } },
+  "vpn": { "chip": true },
   "books": { "dirs": ["~/Books"], "theme": "auto", "daily_goal_minutes": 20, "eye_break_minutes": 30, "view": "book", "covers": "auto" },
   "modes": { "focus_mutes_notifications": true, "focus_dim": true },
   "icons": { "recent_dot": true, "recent_hours": 48 },
@@ -78,6 +80,12 @@ They are calculated on your machine and follow your system's time zone and dayli
 | Key | Default | Meaning |
 |---|---|---|
 | `terminal.project_commands` | `true` | The buttons under the terminal come from the project shown in the work bar (git, plus its `package.json` scripts, Makefile targets, `manage.py`, Cargo, Go, Flutter...), followed by your own `quick-commands.txt`. `false` shows only `quick-commands.txt`. |
+| `terminal.cursor_trail` | `true` | A short comet behind the cursor when it jumps. |
+| `terminal.suggestions.enabled` | `true` | Grey suggestions after the cursor (see [TERMINAL.md](TERMINAL.md)). Applies after a restart. |
+| `terminal.suggestions.ai` | `"auto"` | Who answers Ctrl+Space: `auto` (a local Ollama model if it runs), `ollama`, `claude` (the `claude` CLI; the line you typed goes to Anthropic) or `off`. |
+| `terminal.suggestions.model` | `""` | The Ollama model to use; empty takes the first one installed. |
+| `terminal.suggestions.auto_ai` | `false` | Also ask the AI by itself after a pause when history has nothing (slower on weak computers). |
+| `vpn.chip` | `true` | The Cloudflare WARP chip in the work bar (needs `warp-cli`). Add `vpn` to `dock.cards` for the VPN card. |
 | `terminal.system_input_method` | `false` | By default keys go straight to the terminal. `true` sends them through the system input method (ibus), which adds a delay to every key but is needed for engines such as Chinese, Japanese or Korean. Applies after a restart. |
 | `modes.focus_dim` | `true` (`false` in light mode) | Focus mode puts a dark layer over the wallpaper. Turn it off if Focus feels slow on your graphics. |
 | `modes.focus_mutes_notifications` | `true` | Focus mode turns notification banners off and puts your previous setting back when you leave it (also after a crash or a restart). |
@@ -102,7 +110,7 @@ The Books mode ([BOOKS.md](BOOKS.md)). Also in Settings → Desktop → Books.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `dock.cards` | `git`, `board`, `system`, `day`, `notes`, `tests` | Which cards may use the free space beside the terminal, in the order they are placed: `git`, `board`, `system`, `day`, `notes`, `tests`, `services`. `services` (dev servers and containers) is off by default because the work bar already shows them. Cards that do not fit are left out, so a laptop screen shows none. |
+| `dock.cards` | `git`, `board`, `system`, `day`, `notes`, `tests` | Which cards may use the free space beside the terminal, in the order they are placed: `git`, `board`, `system`, `day`, `notes`, `tests`, `services`, `vpn`. `services` (dev servers and containers) is off by default because the work bar already shows them. Cards that do not fit are left out, so a laptop screen shows none. |
 | `dock.position` | `"left"` | Where Kiln keeps the Ubuntu Dock: `"left"`, `"right"`, `"bottom"` or `""` to leave it alone. Kiln puts it back at once if something moves it. |
 | `performance` | `"auto"` | `"low"` makes Kiln lighter on older computers: background refreshes run about 2.5 times less often and the busiest-programs sample is taken less often. `"auto"` picks it on a computer with two cores or less, or under 4 GB of memory. `"normal"` never does. |
 | `updates.mode` | `"notify"` | `"notify"`: a notification when a new release is out, you press Update. `"auto"`: install it by itself (not while you are in Focus mode). `"off"`: never check. Run `kiln update` any time, `kiln update --rollback` to go back one version. Updates come from the project's GitHub releases, only when signed with the maintainer's release key, and are installed the same way as `./install.sh`. |

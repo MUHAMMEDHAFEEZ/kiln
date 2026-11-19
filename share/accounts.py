@@ -617,7 +617,8 @@ class LarkBase(Service):
     link = "https://github.com/larksuite/cli"
     DEFAULT_FIELDS = dict(title="Task", status="Status", owner="Task leader", project="PROJECTS",
                           priority="Priority", due="Estimate Deadline", due2="End Date", dept="Departments",
-                          notes="Progress notes")
+                          notes="Progress notes", images="Images", files="DOCS",
+                          desc="description", start="Start date", link="LINK")
     DONE = ("completed", "done", "closed", "complete")
     ACTIVE = ("ongoing", "in progress", "doing", "started")
 
@@ -636,6 +637,8 @@ class LarkBase(Service):
             raise ServiceError("lark-cli sent something Kiln does not understand.") from None
         if d.get("ok") is False:
             e = d.get("error") or {}
+            if e.get("subtype") == "missing_scope" and "upload" in str(e.get("message", "")):
+                raise ServiceError(self.UPLOAD_HELP)
             if e.get("subtype") == "missing_scope":
                 raise ServiceError("Kiln needs read access to Lark Base. Run: lark-cli auth login --scope "
                                    "\"base:app:read base:table:read base:field:read base:record:read base:view:read\"")
@@ -696,7 +699,23 @@ class LarkBase(Service):
             return [str(v["name"]).strip()] if v.get("name") else ([str(v["text"]).strip()] if v.get("text") else [])
         return [str(v).strip()] if str(v).strip() else []
 
+    @staticmethod
+    def links(cell):
+        """[(label, url)] from a link cell: Lark gives '[label](address)' text; an address that is not a real
+        https link comes back as an empty url (shown, but never opened)."""
+        out = []
+        for v in LarkBase.values(cell):
+            found = re.findall(r"\[([^\]]*)\]\(([^)]*)\)", v)
+            for label, url in found or [(v, v)]:
+                url = url.strip()
+                out.append((clean_text(label or url, 80), safe_url(url) if not re.search(r"\s", url) else ""))
+        return out[:10]
+
     # ---- writing (needs: lark-cli auth login --scope "base:record:create base:record:update")
+    UPLOAD_HELP = ("Kiln needs permission to upload files. Run: lark-cli auth login --scope "
+                   "\"docs:document.media:upload\"")
+    IMAGE_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic", ".tif", ".tiff", ".svg")
+    MAX_FILES = 20
     WRITE_HELP = ("Kiln needs permission to change this table. Run: lark-cli auth login --scope "
                   "\"base:record:create base:record:update\"")
 
@@ -848,6 +867,45 @@ class LarkBase(Service):
         rec = d.get("record") or d
         return rec.get("record_id") or rec.get("id") or ""
 
+    @classmethod
+    def split_files(cls, paths):
+        """(images, others) from local paths; only real files count. Raises ServiceError on a missing file."""
+        images, others, seen = [], [], set()
+        for p in paths or []:
+            p = os.path.abspath(os.path.expanduser(str(p)))
+            if p in seen:
+                continue
+            seen.add(p)
+            if not os.path.isfile(p):
+                raise ServiceError(f"{os.path.basename(p) or p} is not a file.")
+            (images if p.lower().endswith(cls.IMAGE_EXT) else others).append(p)
+        if len(images) + len(others) > cls.MAX_FILES:
+            raise ServiceError(f"At most {cls.MAX_FILES} files per task.")
+        return images, others
+
+    def attach(self, cfg, record_id, paths):
+        """Upload local files to a task: pictures go to its Images column, other files to its DOCS column.
+        Returns how many were uploaded. Needs: lark-cli auth login --scope "docs:document.media:upload"."""
+        images, others = self.split_files(paths)
+        if not (record_id and (images or others)):
+            return 0
+        base, table, _url = self.parse_link(cfg.get("link"))
+        fm = self._fieldmap(cfg)
+        for field, files in ((fm["images"], images), (fm["files"], others)):
+            if not files:
+                continue
+            args = ["base", "+record-upload-attachment", "--base-token", base, "--table-id", table,
+                    "--record-id", record_id, "--field-id", field, "--as", "user"]
+            for f in files:
+                args += ["--file", f]
+            try:
+                self._cli(*args)
+            except ServiceError as e:
+                if "read access" in str(e):
+                    raise ServiceError(self.UPLOAD_HELP) from None
+                raise
+        return len(images) + len(others)
+
     def set_status(self, cfg, record_id, status):
         fm, opts = self._fieldmap(cfg), self.options(cfg)
         exact = self.pick(opts.get("status", []), status)
@@ -907,8 +965,12 @@ class LarkBase(Service):
             owners = self.values(r.get(fm["owner"]))
             t = task(self.id, rid, title, due, f"{base_url}?table={table}&record={rid}",
                      ", ".join(self.values(r.get(fm["dept"]))))
-            note = (self.values(r.get(fm["notes"])) or [""])[0]
-            t.update(groups=groups, status=status, done=done, owners=owners, note=note[:300],
+            note = "\n".join(self.values(r.get(fm["notes"])))
+            links = self.links(r.get(fm["link"]))
+            attach = [clean_text(n, 80) for key in ("images", "files") for n in self.values(r.get(fm[key]))][:20]
+            t.update(groups=groups, status=status, done=done, owners=owners, note=note[:1500], attachments=attach, links=links,
+                     desc="\n".join(self.values(r.get(fm["desc"])))[:4000],
+                     start=ts((self.values(r.get(fm["start"])) or [None])[0]),
                      priority=(self.values(r.get(fm["priority"])) or [""])[0],
                      project=", ".join(self.values(r.get(fm["project"]))),
                      # the Today card gets only what you are working on right now

@@ -37,6 +37,14 @@ elif args[:2] == ["base", "+record-upsert"]:
         f.write(json.dumps({"json": json.loads(args[args.index("--json") + 1]),
                             "record": args[args.index("--record-id") + 1] if "--record-id" in args else None}) + "\n")
     print(json.dumps({"ok": True, "data": {"record": {"record_id": "recNEW1"}}}))
+elif args[:2] == ["base", "+record-upload-attachment"]:
+    if os.environ.get("FAKE_NO_UPLOAD"):
+        print(json.dumps({"ok": False, "error": {"type": "authorization", "subtype": "missing_scope",
+                                                 "message": "missing required scope(s): docs:document.media:upload"}}))
+        sys.exit(1)
+    with open(os.environ["FAKE_LOG"], "a") as f:
+        f.write(json.dumps({"upload": args}) + "\n")
+    print(json.dumps({"ok": True, "data": {}}))
 elif args[:2] == ["base", "+record-list"]:
     offset = int(args[args.index("--offset") + 1]) if "--offset" in args else 0
     fields = ["Task", "Status", "Task leader", "PROJECTS", "Priority", "Estimate Deadline", "Departments"]
@@ -67,6 +75,7 @@ class LarkBaseTests(unittest.TestCase):
         os.environ["PATH"] = self.tmp.name + os.pathsep + self.old_path
         os.environ.pop("FAKE_FAIL", None)
         os.environ.pop("FAKE_NO_WRITE", None)
+        os.environ.pop("FAKE_NO_UPLOAD", None)
         self.log = f"{self.tmp.name}/writes.jsonl"
         os.environ["FAKE_LOG"] = self.log
         self.svc = A.SERVICES["larkbase"]
@@ -75,6 +84,7 @@ class LarkBaseTests(unittest.TestCase):
         os.environ["PATH"] = self.old_path
         os.environ.pop("FAKE_FAIL", None)
         os.environ.pop("FAKE_NO_WRITE", None)
+        os.environ.pop("FAKE_NO_UPLOAD", None)
         self.tmp.cleanup()
 
     def test_link_parsing(self):
@@ -162,6 +172,68 @@ class LarkBaseTests(unittest.TestCase):
             self.svc.set_status({"link": LINK}, "rec7", "Ongoing")
         self.assertIn("base:record:create base:record:update", str(c.exception))
 
+    # ---- pictures and files on a new task
+    def read_log(self):
+        with open(self.log) as f:
+            return f.read()
+
+    def make_files(self, *names):
+        paths = []
+        for n in names:
+            p = os.path.join(self.tmp.name, n)
+            with open(p, "wb") as f:
+                f.write(b"x")
+            paths.append(p)
+        return paths
+
+    def test_pictures_go_to_images_and_other_files_to_docs(self):
+        shot, pdf, shot2 = self.make_files("shot.PNG", "spec.pdf", "b.jpg")
+        self.assertEqual(self.svc.attach({"link": LINK}, "recNEW1", [shot, pdf, shot2, shot]), 3)   # a repeat counts once
+        ups = [json.loads(l)["upload"] for l in self.read_log().splitlines()]
+        self.assertEqual(len(ups), 2)
+        self.assertEqual(ups[0][ups[0].index("--field-id") + 1], "Images")
+        self.assertEqual([ups[0][i + 1] for i, a in enumerate(ups[0]) if a == "--file"], [shot, shot2])
+        self.assertEqual(ups[1][ups[1].index("--field-id") + 1], "DOCS")
+        self.assertEqual(ups[1][ups[1].index("--record-id") + 1], "recNEW1")
+
+    def test_the_column_names_can_be_changed(self):
+        (shot,) = self.make_files("a.png")
+        self.svc.attach({"link": LINK, "images_field": "Screenshots"}, "rec1", [shot])
+        up = json.loads(self.read_log())["upload"]
+        self.assertEqual(up[up.index("--field-id") + 1], "Screenshots")
+
+    def test_a_missing_file_or_too_many_is_refused_before_anything_is_sent(self):
+        with self.assertRaises(A.ServiceError):
+            self.svc.attach({"link": LINK}, "rec1", [os.path.join(self.tmp.name, "nope.png")])
+        many = self.make_files(*[f"f{i}.png" for i in range(A.LarkBase.MAX_FILES + 1)])
+        with self.assertRaises(A.ServiceError):
+            self.svc.attach({"link": LINK}, "rec1", many)
+        self.assertFalse(os.path.exists(self.log))
+
+    def test_a_missing_upload_permission_says_how_to_fix_it(self):
+        (shot,) = self.make_files("a.png")
+        os.environ["FAKE_NO_UPLOAD"] = "1"
+        with self.assertRaises(A.ServiceError) as c:
+            self.svc.attach({"link": LINK}, "rec1", [shot])
+        self.assertIn("docs:document.media:upload", str(c.exception))
+
+    def test_the_task_is_kept_when_only_the_upload_fails(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "share"))
+        import newtask
+        old_sync, old_remember = A.sync, A.remember_created
+        A.sync, A.remember_created = lambda *_a, **_k: None, lambda *_a: None
+        try:
+            (shot,) = self.make_files("a.png")
+            self.assertEqual(newtask.create_and_sync(self.svc, {"link": LINK}, title="With picture", files=[shot]), "recNEW1")
+            os.environ["FAKE_NO_UPLOAD"] = "1"
+            with self.assertRaises(newtask.PartialError) as c:
+                newtask.create_and_sync(self.svc, {"link": LINK}, title="Another", files=[shot])
+            self.assertEqual(c.exception.rid, "recNEW1")              # the task exists: it is not added twice
+            self.assertIn("The task was added", str(c.exception))
+            self.assertEqual(len([w for w in self.writes() if "json" in w]), 2)
+        finally:
+            A.sync, A.remember_created = old_sync, old_remember
+
 
 class NewTaskTests(unittest.TestCase):
     def test_a_tab_name_becomes_the_project_to_preselect(self):
@@ -178,3 +250,12 @@ class NewTaskTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LinkCellTests(unittest.TestCase):
+    def test_markdown_links(self):
+        L = A.LarkBase
+        self.assertEqual(L.links("[Docs](https://a.test/x)"), [("Docs", "https://a.test/x")])
+        self.assertEqual(L.links("[Swagger Link](http://Swagger Link)"), [("Swagger Link", "")])   # not a real address
+        self.assertEqual(L.links("[x](javascript:alert(1))"), [("x", "")])                          # only web links open
+        self.assertEqual(L.links(None), [])

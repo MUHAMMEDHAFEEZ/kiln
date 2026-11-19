@@ -43,6 +43,9 @@ import iconkit as K  # noqa: E402
 import prayer as PR  # noqa: E402
 import accounts as ACC  # noqa: E402
 import timelog as TL  # noqa: E402
+import keys as KEYS  # noqa: E402
+import suggest as SG  # noqa: E402  (grey command suggestions in the terminal)
+import warp as WP  # noqa: E402  (Cloudflare WARP: the work-bar chip and the VPN card)
 import reader as RD  # noqa: E402  (the Books mode; draws with the helpers of this file)
 RD.bind(sys.modules[__name__])
 FONT = "Ubuntu Sans"
@@ -64,7 +67,9 @@ DEFAULT_CONFIG = {
     "web_search": {"name": "DuckDuckGo", "url": "https://duckduckgo.com/?q={q}"},
     "integrations": {"github": True, "lark": False, "claude_code": True},
     "now_playing": {"youtube_music_only": False},
-    "terminal": {"project_commands": True, "system_input_method": False},
+    "terminal": {"project_commands": True, "system_input_method": False, "cursor_trail": True,
+                 "suggestions": {"enabled": True, "ai": "auto", "model": "", "auto_ai": False}},
+    "vpn": {"chip": True},
     "books": {"dirs": ["~/Books"], "theme": "auto", "daily_goal_minutes": 20, "eye_break_minutes": 30, "view": "book", "covers": "auto"},
     "modes": {"focus_mutes_notifications": True},
     "icons": {"recent_dot": True, "recent_hours": 48},
@@ -109,6 +114,8 @@ def _light_mode():
     return (os.cpu_count() or 4) <= 2 or mem_kb < 4_500_000
 
 
+SG_CFG = SG.settings(((CFG.get("terminal") or {}).get("suggestions")))
+SG_HISTORY = SG.History(f"{APP}/commands.log")
 SHOW_AGENDA = bool((CFG.get("cards") or {}).get("agenda", True))   # the Agenda card (meetings) on the Overview
 LIGHT = _light_mode()
 SLOW = 2.5 if LIGHT else 1.0          # how much slower the background timers run in light mode
@@ -1174,8 +1181,11 @@ class Cards(Gtk.Overlay):
             self.toggle_item(key[1])
         elif kind == "task_row":
             it = self.items.get(key[1])
-            if it and it["source"] == "account" and it.get("url"):
-                open_url(it["url"])
+            if it and it["source"] == "account":
+                full = next((t for t in board_state()[1] if t["id"] == it["guid"]), None) \
+                    if it["service"] == "larkbase" else None
+                show_task(full or _plain_task(it), ev, self.area.queue_draw,
+                          complete=lambda: (self.complete_task(it), self.area.queue_draw()))
         elif kind == "add":
             self.show_entry()
         elif kind == "tab":
@@ -1823,8 +1833,12 @@ class TerminalCard(Gtk.Box):
         self.foot = self._area(self.FOOT, self.on_foot_draw, self.on_foot_press, self.on_foot_motion)
         self.pack_start(self.head, False, False, 0)
         self.pack_start(self.stack, True, True, 0)
+        self.search = self.build_search()
+        self.pack_start(self.search, False, False, 0)
         self.pack_start(self.foot, False, False, 0)
         self.tabs, self.active = [], 0
+        self.zoom = 0                                             # Ctrl +/- (Ctrl+0 resets), like kitty
+        self._sg, self._trail = {}, {}                            # per terminal: suggestion state, cursor trail
         self.hud, self.on_hud, self.alpha = None, None, 0.80      # Focus mode: timer pill, solid card
         self.hover, self.hits, self.fhits = None, [], []
         self.branch = ""
@@ -1834,6 +1848,89 @@ class TerminalCard(Gtk.Box):
         self.new_tab(os.path.expanduser("~/Desktop"))
         GLib.timeout_add_seconds(every(1), self.poll_cwd)
         self._first_dir = not DEMO       # (a demo already starts in its project)
+
+    # --- search in the terminal (Ctrl+F at the prompt, Ctrl+Shift+F anywhere)
+    def build_search(self):
+        bar = Gtk.Box(spacing=6)
+        bar.get_style_context().add_class("kiln-search")
+        for m in ("start", "end"):
+            getattr(bar, f"set_margin_{m}")(16)
+        bar.set_margin_top(4)
+        bar.set_margin_bottom(4)
+        self.search_entry = Gtk.Entry(placeholder_text="Search the terminal\u2026", hexpand=True)
+        self.search_entry.set_icon_from_icon_name(Gtk.EntryIconPosition.PRIMARY, "edit-find-symbolic")
+        self.search_info = Gtk.Label()
+        self.search_info.get_style_context().add_class("dim-label")
+        self.search_case = Gtk.ToggleButton(label="Aa", tooltip_text="Match case")
+        up = Gtk.Button(label="\u2191", tooltip_text="Older match (Enter)")
+        down = Gtk.Button(label="\u2193", tooltip_text="Newer match (Shift+Enter)")
+        close = Gtk.Button(label="\u2715", tooltip_text="Close (Esc)")
+        for w in (self.search_entry, self.search_info, self.search_case, up, down, close):
+            bar.pack_start(w, w is self.search_entry, w is self.search_entry, 0)
+        self.search_entry.connect("changed", lambda *_: self.run_search(fresh=True))
+        self.search_entry.connect("activate", lambda *_: self.run_search(backwards=True))
+        self.search_entry.connect("key-press-event", self._search_key)
+        self.search_case.connect("toggled", lambda *_: self.run_search(fresh=True))
+        up.connect("clicked", lambda *_: self.run_search(backwards=True))
+        down.connect("clicked", lambda *_: self.run_search(backwards=False))
+        close.connect("clicked", lambda *_: self.hide_search())
+        css = (f"box.kiln-search entry {{ background: rgba(0,0,0,0.28); color: #{C['text']}; border: 1px solid #{C['border']};"
+               f" border-radius: 8px; min-height: 24px; padding: 0 8px; caret-color: #{C['acc']}; }}"
+               f"box.kiln-search entry:focus {{ border-color: #{C['acc']}; }}"
+               f"box.kiln-search button {{ background: rgba(255,255,255,0.06); color: #{C['text']}; border: 1px solid #{C['border']};"
+               f" border-radius: 8px; min-height: 24px; min-width: 24px; padding: 0 8px; box-shadow: none; text-shadow: none; }}"
+               f"box.kiln-search button:checked {{ background: #{C['acc']}; color: #{C['on_acc']}; }}"
+               f"box.kiln-search label {{ color: #{C['dim']}; font-size: 12px; }}")
+        prov = Gtk.CssProvider()
+        prov.load_from_data(css.encode())
+        for w in [bar] + bar.get_children():
+            w.get_style_context().add_provider(prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        bar.set_no_show_all(True)
+        return bar
+
+    def show_search(self):
+        self.search.set_no_show_all(False)
+        self.search.show_all()
+        self.search_entry.grab_focus()
+        self.search_entry.select_region(0, -1)
+
+    def hide_search(self):
+        self.search.hide()
+        self.search.set_no_show_all(True)
+        for tab in self.tabs:
+            for pane in tab["panes"]:
+                pane["term"].search_set_regex(None, 0)
+        self.term.unselect_all()
+        self.search_info.set_text("")
+        self.term.grab_focus()
+
+    def _search_key(self, _w, ev):
+        if ev.keyval == Gdk.KEY_Escape:
+            self.hide_search()
+            return True
+        if ev.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and ev.state & Gdk.ModifierType.SHIFT_MASK:
+            self.run_search(backwards=False)
+            return True
+        return False
+
+    def run_search(self, backwards=True, fresh=False):
+        term, text = self.term, self.search_entry.get_text()
+        if not text:
+            term.search_set_regex(None, 0)
+            term.unselect_all()
+            self.search_info.set_text("")
+            return
+        flags = 0x00000400 | (0 if self.search_case.get_active() else 0x00000008)     # PCRE2_MULTILINE | CASELESS
+        try:
+            rx = Vte.Regex.new_for_search(GLib.regex_escape_string(text, -1), -1, flags)
+        except GLib.Error:
+            return
+        term.search_set_regex(rx, 0)
+        term.search_set_wrap_around(True)
+        if fresh:
+            term.unselect_all()
+        found = term.search_find_previous() if backwards else term.search_find_next()
+        self.search_info.set_text("" if found else "no match")
 
     def _area(self, h, draw, press, motion):
         a = Gtk.DrawingArea()
@@ -1852,7 +1949,7 @@ class TerminalCard(Gtk.Box):
         t.set_margin_start(20)
         t.set_margin_end(14)
         t.set_margin_top(4)
-        t.set_font(Pango.FontDescription(f"Hack {getattr(self, 'font_pt', 11)}"))
+        t.set_font(Pango.FontDescription(f"Hack {self.eff_pt()}"))
         t.set_cell_height_scale(1.12)
         t.set_size(84, 9)
         t.set_scrollback_lines(5000)
@@ -1882,6 +1979,10 @@ class TerminalCard(Gtk.Box):
         t.connect("key-press-event", self.on_key)
         t.connect("button-press-event", self.on_term_button)
         t.connect("contents-changed", self._echo)
+        t.connect("contents-changed", lambda term: self._sg_changed(term))
+        t.connect("window-title-changed", lambda term: self._sg_title(term))
+        t.connect("cursor-moved", lambda term: term.queue_draw())
+        t.connect_after("draw", self._term_overlay)
         return t
 
     # --- typing probe: a key press, the shell's answer, the frame that shows it. Summaries go to the log (kiln logs)
@@ -1902,11 +2003,21 @@ class TerminalCard(Gtk.Box):
         lag["key"] = lag["echo"] = 0.0
         return False
 
+    def eff_pt(self):
+        return max(7, min(32, getattr(self, "font_pt", 11) + self.zoom))
+
     def set_font_pt(self, pt):
         self.font_pt = pt
+        self.apply_font()
+
+    def apply_font(self):
         for tab in self.tabs:
             for pane in tab["panes"]:
-                pane["term"].set_font(Pango.FontDescription(f"Hack {pt}"))
+                pane["term"].set_font(Pango.FontDescription(f"Hack {self.eff_pt()}"))
+
+    def zoom_by(self, step):
+        self.zoom = 0 if step == 0 else max(-4, min(12, self.zoom + step))
+        self.apply_font()
 
     def set_size(self, w, h):
         """Resize the card (the window is resized by the caller). The strips draw to self.W."""
@@ -1981,15 +2092,27 @@ class TerminalCard(Gtk.Box):
 
     def spawn(self, tab, pane=None, start=None):
         pane = pane or tab["panes"][0]
-        env = [f"{k}={v}" for k, v in clean_env().items()] + ["COLORTERM=truecolor"]
+        env = [f"{k}={v}" for k, v in clean_env().items()] + ["COLORTERM=truecolor", f"KILN_CMDLOG={APP}/commands.log"]
 
         def done(_t, pid, err, *_a):
             pane["pid"] = pid if not err else None
             if tab["term"] is pane["term"]:
                 tab["pid"] = pane["pid"]
         pane["term"].spawn_async(Vte.PtyFlags.DEFAULT, start or tab["start"],
-                                 ["/bin/bash", "--rcfile", f"{CACHE}/term.bashrc"], env,
+                                 ["/bin/bash", "--rcfile", self.shell_rc()], env,
                                  GLib.SpawnFlags.DEFAULT, None, None, -1, None, done)
+
+    def shell_rc(self):
+        """The rc file the shell starts with: the prompt (term.bashrc) plus the hooks the suggestions need."""
+        base = f"{CACHE}/term.bashrc"
+        if not SG_CFG["enabled"]:
+            return base
+        try:
+            SG.prepare_log(f"{APP}/commands.log")
+            SG.write_shell_rc(f"{CACHE}/term-shell.bashrc", base)
+            return f"{CACHE}/term-shell.bashrc"
+        except OSError:
+            return base
 
     def on_exit(self, tab, pane=None):
         pane = pane or (tab["panes"][0] if tab["panes"] else None)
@@ -2176,14 +2299,323 @@ class TerminalCard(Gtk.Box):
     def short(p):
         return "~" + p[len(HOME):] if p.startswith(HOME) else p
 
+    # --- suggestions: grey text after the cursor (Tab or \u2192 takes it), like fish. AI only on Ctrl+Space or after "#"
+    def _sg_state(self, term):
+        return self._sg.setdefault(term, dict(prompt=False, typed="", full="", kind="", replace=False, token=0,
+                                              timer=0, ai_timer=0, thinking=False, note="", hidden_for=None))
+
+    def _sg_title(self, term):
+        st = self._sg_state(term)
+        st["prompt"] = term.get_window_title() == "kiln:prompt"
+        if not st["prompt"]:
+            self._sg_clear(term)
+        else:
+            self._sg_schedule(term)
+
+    def _sg_changed(self, term):
+        st = self._sg_state(term)
+        if st["prompt"] and SG_CFG["enabled"]:
+            self._sg_schedule(term)
+
+    def _sg_clear(self, term):
+        st = self._sg_state(term)
+        had = st["full"] or st["thinking"] or st["note"]
+        st.update(full="", kind="", replace=False, thinking=False, note="", typed="", token=st["token"] + 1)
+        if had:
+            term.queue_draw()
+
+    def _sg_schedule(self, term):
+        st = self._sg_state(term)
+        if st["timer"]:
+            GLib.source_remove(st["timer"])
+        st["timer"] = GLib.timeout_add(35, self._sg_update, term)
+
+    def _sg_line(self, term):
+        """What is typed after the prompt on the cursor's row, or None (no prompt here, scrolled up, text after the
+        cursor)."""
+        adj = term.get_vadjustment()
+        if adj is None or adj.get_value() + adj.get_page_size() < adj.get_upper() - 0.5:
+            return None
+        col, row = term.get_cursor_position()
+        fmt = Vte.Format.TEXT
+        line = term.get_text_range_format(fmt, row, 0, row, col)[0] or ""
+        if term.get_text_range_format(fmt, row, col, row, term.get_column_count())[0].strip():
+            return None
+        line += " " * max(0, col - SG.cells(line))               # VTE trims spaces at the end of a line
+        m = re.match(r"^[$#] (.*)$", line, re.S)
+        return m.group(1) if m else None
+
+    def _term_cwd(self, term):
+        for tab in self.tabs:
+            for pane in tab["panes"]:
+                if pane["term"] is term:
+                    try:
+                        return os.readlink(f"/proc/{pane['pid']}/cwd")
+                    except (OSError, TypeError):
+                        return tab["cwd"]
+        return HOME
+
+    def _sg_update(self, term):
+        st = self._sg_state(term)
+        st["timer"] = 0
+        typed = self._sg_line(term) if (st["prompt"] and SG_CFG["enabled"]) else None
+        if typed is None or not typed.strip():
+            self._sg_clear(term)
+            return False
+        if typed == st["typed"] and (st["full"] or st["thinking"]) and not st["note"]:
+            return False                                          # nothing changed since the last answer
+        st.update(typed=typed, full="", kind="", replace=False, note="", thinking=False, token=st["token"] + 1)
+        token, cwd = st["token"], self._term_cwd(term)
+        if st["ai_timer"]:
+            GLib.source_remove(st["ai_timer"])
+            st["ai_timer"] = 0
+        term.queue_draw()
+        if typed.startswith("#"):                                 # a request: wait for Ctrl+Space / Tab
+            st["note"] = "Ctrl+Space \u2192 command" if len(typed) > 2 else ""
+            return False
+        if typed == st["hidden_for"]:
+            return False
+
+        def work():
+            hit = SG.local(typed, cwd, SG_HISTORY)
+            GLib.idle_add(self._sg_apply, term, token, hit)
+        threading.Thread(target=work, daemon=True).start()
+        return False
+
+    def _sg_apply(self, term, token, hit, replace=False):
+        st = self._sg_state(term)
+        if token != st["token"]:
+            return False
+        if hit:
+            st.update(full=hit[0], kind=hit[1], replace=replace, thinking=False, note="")
+        elif SG_CFG["auto_ai"] and len(st["typed"]) >= 4 and SG.backend(SG_CFG):
+            st["ai_timer"] = GLib.timeout_add(700, lambda: (self._sg_ai(term), False)[1])
+        term.queue_draw()
+        return False
+
+    def _sg_ai(self, term):
+        """Ask the AI (Ctrl+Space, a '#' request, or after a pause when 'auto_ai' is on)."""
+        st = self._sg_state(term)
+        typed = st["typed"]
+        if not typed.strip():
+            return
+        be = SG.backend(SG_CFG)
+        if not be:
+            st["note"] = "AI is off: start Ollama or pick Claude in Settings"
+            term.queue_draw()
+            GLib.timeout_add(3500, lambda: (st.update(note="") or term.queue_draw(), False)[-1])
+            return
+        st.update(thinking=True, note="", token=st["token"] + 1)
+        token, cwd = st["token"], self._term_cwd(term)
+        term.queue_draw()
+
+        def work():
+            cmd = SG.ask_ai(typed, cwd, SG_HISTORY, SG_CFG)
+            GLib.idle_add(self._sg_ai_done, term, token, cmd)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _sg_ai_done(self, term, token, cmd):
+        st = self._sg_state(term)
+        if token != st["token"]:
+            return False
+        st["thinking"] = False
+        if cmd:
+            st.update(full=cmd, kind="ai", replace=st["typed"].startswith("#"), note="")
+        else:
+            st["note"] = "no suggestion"
+            GLib.timeout_add(2500, lambda: (st["note"] == "no suggestion" and st.update(note="") or term.queue_draw(), False)[-1])
+        term.queue_draw()
+        return False
+
+    def _sg_accept(self, term, word=False):
+        st = self._sg_state(term)
+        full, typed = st["full"], st["typed"]
+        if not full:
+            return False
+        if not SG.is_safe(full):                                  # last line of defence: never type control characters
+            self._sg_clear(term)
+            return False
+        if st["replace"]:                                         # "# request" becomes the command
+            term.feed_child(b"\x15")                             # Ctrl+U clears the line first
+            term.paste_text(full)                                 # a paste: readline takes it literally
+            new = full
+        else:
+            new = SG.accept_word(typed, full) if word else full
+            term.paste_text(new[len(typed):])
+        st.update(typed=new, full=full if (word and new != full and not st["replace"]) else "", token=st["token"] + 1)
+        term.queue_draw()
+        return True
+
+    def _sg_key(self, term, ev):
+        """Keys for the suggestion; True when it used the key."""
+        if not SG_CFG["enabled"]:
+            return False
+        st = self._sg_state(term)
+        mods = ev.state & Gtk.accelerator_get_default_mod_mask()
+        kv, ctrl = ev.keyval, Gdk.ModifierType.CONTROL_MASK
+        if not st["prompt"]:
+            return False
+        if kv == Gdk.KEY_space and mods == ctrl:
+            st["typed"] = self._sg_line(term) or ""
+            self._sg_ai(term)
+            return True
+        if st["full"]:
+            if mods == 0 and kv in (Gdk.KEY_Tab, Gdk.KEY_Right, Gdk.KEY_KP_Right, Gdk.KEY_End):
+                return self._sg_accept(term)
+            if mods == ctrl and kv in (Gdk.KEY_Right, Gdk.KEY_KP_Right):
+                return self._sg_accept(term, word=True)
+            if mods == 0 and kv == Gdk.KEY_Escape:
+                st.update(hidden_for=st["typed"], full="", token=st["token"] + 1)
+                term.queue_draw()
+                return True
+            ch = chr(kv) if 0x20 <= kv < 0x7f else ""
+            if ch and mods in (0, Gdk.ModifierType.SHIFT_MASK) and not st["replace"] \
+                    and st["full"].startswith(st["typed"] + ch):   # typing along the suggestion: keep it, no flicker
+                st["typed"] += ch
+                term.queue_draw()
+                return False
+        if not 0xffe1 <= kv <= 0xffee:                            # not a lone Shift / Ctrl / Alt
+            st["full"] = ""
+            st["note"] = ""
+            st["hidden_for"] = None if kv not in (Gdk.KEY_Escape,) else st["hidden_for"]
+        return False
+
+    def _term_overlay(self, term, cr):
+        """After the terminal drew itself: the cursor trail, then the suggestion."""
+        try:
+            col, row = term.get_cursor_position()
+            adj = term.get_vadjustment()
+            if adj is None:
+                return False
+            vrow = row - adj.get_value()
+            if not 0 <= vrow < adj.get_page_size():
+                return False
+            cw, chh = term.get_char_width(), term.get_char_height()
+            if (CFG.get("terminal") or {}).get("cursor_trail", True):
+                self._trail_draw(term, cr, col, vrow, cw, chh)
+            self._sg_draw(term, cr, col, vrow, cw, chh)
+        except Exception as exc:                                    # an overlay must never break the terminal
+            if not getattr(self, "_overlay_err", False):
+                self._overlay_err = True
+                print(f"kiln: terminal overlay: {exc!r}", flush=True)
+        return False
+
+    def _sg_draw(self, term, cr, col, vrow, cw, chh):
+        st = self._sg.get(term)
+        if not st or not st["prompt"]:
+            return
+        room = term.get_column_count() - col - 1
+        if st["thinking"]:
+            body, tag = "thinking\u2026", ""
+        elif st["full"]:
+            body = ("\u2192 " if st["replace"] else "") + (st["full"] if st["replace"] else st["full"][len(st["typed"]):])
+            tag = "\u2726 Tab" if st["kind"] == "ai" else "Tab"
+            room -= len(tag) + 4
+        elif st["note"]:
+            body, tag = st["note"], ""
+        else:
+            return
+        if SG.cells(body) > room:
+            body = SG.clip(body, max(1, room - 1)) + "\u2026"
+        if room < 3:
+            return
+        lay = PangoCairo.create_layout(cr)
+        lay.set_font_description(term.get_font())
+        x0, y0 = col * cw, vrow * chh
+        if st["replace"] and st["full"]:
+            body = "  " + body
+        lay.set_text(body, -1)
+        _lw, lh = lay.get_pixel_size()
+        cr.save()
+        set_rgba(cr, C["dim"], 0.9 if st["kind"] != "ai" else 0.95)
+        cr.move_to(x0, y0 + (chh - lh) / 2)
+        PangoCairo.show_layout(cr, lay)
+        if tag:
+            tx = x0 + SG.cells(body) * cw + cw
+            lay.set_text(tag, -1)
+            tw, th = lay.get_pixel_size()
+            rrect(cr, tx - 4, y0 + (chh - th) / 2 - 1, tw + 8, th + 2, 4)
+            set_rgba(cr, C["dim"], 0.5)
+            cr.set_line_width(1)
+            cr.stroke()
+            set_rgba(cr, C["dim"], 0.85)
+            cr.move_to(tx, y0 + (chh - th) / 2)
+            PangoCairo.show_layout(cr, lay)
+        cr.restore()
+
+    def _trail_draw(self, term, cr, col, vrow, cw, chh):
+        """A short comet behind the cursor when it jumps (like kitty's cursor_trail)."""
+        tr = self._trail.setdefault(term, dict(pos=None, src=None, t0=0.0, ticking=False))
+        cur = (col, vrow)
+        if tr["pos"] is None:
+            tr["pos"] = cur
+        elif cur != tr["pos"]:
+            old = tr["pos"]
+            tr["pos"] = cur
+            if abs(cur[0] - old[0]) + abs(cur[1] - old[1]) >= 2:
+                tr["src"], tr["t0"] = old, time.monotonic()
+        dur = 0.17
+        age = time.monotonic() - tr["t0"]
+        if not tr["src"] or age >= dur:
+            return
+        p = age / dur
+        e = 1 - (1 - p) ** 3                                        # the tail catches up with the cursor
+        sx, sy = tr["src"][0] + (cur[0] - tr["src"][0]) * e, tr["src"][1] + (cur[1] - tr["src"][1]) * e
+        bw = max(2.0, cw * 0.3)
+        rects = [(cur[0] * cw, cur[1] * chh), (sx * cw, sy * chh)]
+        pts = [(x + dx, y + dy) for x, y in rects for dx in (0, bw) for dy in (0, chh)]
+        hull = SG.convex_hull(pts)
+        cr.save()
+        cr.new_path()
+        cr.move_to(*hull[0])
+        for q in hull[1:]:
+            cr.line_to(*q)
+        cr.close_path()
+        cc = Gdk.RGBA()
+        cc.parse("#" + (THEME or {}).get("system", {}).get("term_cursor", "b794f6"))
+        cr.set_source_rgba(cc.red, cc.green, cc.blue, 0.55 * (1 - p))
+        cr.fill()
+        cr.restore()
+        if not tr["ticking"]:
+            tr["ticking"] = True
+
+            def tick():
+                term.queue_draw()
+                if time.monotonic() - tr["t0"] < dur:
+                    return True
+                tr["ticking"] = False
+                return False
+            GLib.timeout_add(16, tick)
+
     # --- keys / mouse in the terminal
     def on_key(self, _w, ev):
         mods = ev.state & Gtk.accelerator_get_default_mod_mask()
         cs = Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
-        kv = ev.keyval
+        kv = KEYS.latin_key(ev) if mods & Gdk.ModifierType.CONTROL_MASK else ev.keyval   # Ctrl+C... on an Arabic layout too
         if 0x20 <= kv < 0x7f and not self._lag["key"]:                 # a printable key: time how long until it shows
             self._lag["key"], self._lag["echo"] = time.perf_counter(), 0.0
-        if mods == cs and kv in (Gdk.KEY_C, Gdk.KEY_c):
+        if self._sg_key(_w, ev):
+            return True
+        ctrl_only = mods == Gdk.ModifierType.CONTROL_MASK
+        prompt = self._sg_state(_w)["prompt"]
+        if ctrl_only and kv in (Gdk.KEY_c, Gdk.KEY_C) and _w.get_has_selection():     # copy_or_interrupt (kitty)
+            _w.copy_clipboard_format(Vte.Format.TEXT)
+            _w.unselect_all()
+        elif mods & Gdk.ModifierType.CONTROL_MASK and not mods & Gdk.ModifierType.MOD1_MASK and kv in (
+                Gdk.KEY_plus, Gdk.KEY_equal, Gdk.KEY_KP_Add):
+            self.zoom_by(1)
+        elif mods & Gdk.ModifierType.CONTROL_MASK and not mods & Gdk.ModifierType.MOD1_MASK and kv in (
+                Gdk.KEY_minus, Gdk.KEY_underscore, Gdk.KEY_KP_Subtract):
+            self.zoom_by(-1)
+        elif ctrl_only and kv in (Gdk.KEY_0, Gdk.KEY_KP_0):
+            self.zoom_by(0)
+        elif mods == cs and kv in (Gdk.KEY_F, Gdk.KEY_f) or (ctrl_only and kv in (Gdk.KEY_f, Gdk.KEY_F) and prompt):
+            self.show_search()
+        elif mods == 0 and kv in (Gdk.KEY_Page_Up, Gdk.KEY_Page_Down) and prompt:   # scroll the history (kitty)
+            adj = _w.get_vadjustment()
+            if adj is not None:
+                adj.set_value(adj.get_value() + (1 if kv == Gdk.KEY_Page_Down else -1) * (adj.get_page_size() - 1))
+        elif mods == cs and kv in (Gdk.KEY_C, Gdk.KEY_c):
             self.term.copy_clipboard_format(Vte.Format.TEXT)
         elif mods == cs and kv in (Gdk.KEY_V, Gdk.KEY_v):
             self.term.paste_clipboard()
@@ -4816,7 +5248,28 @@ class WorkBar(Gtk.DrawingArea):
                 items += [(None, None), ("Copy the command", lambda: copy_text(it["test"]))]
                 popup_menu(ev, items)
             return True
+        if kind == "more":
+            self.more_menu(ev, it)
+            return True
+        if kind == "vpn":
+            if ev.button == 1 and WARP[0]:
+                WARP[0].toggle()
+            else:
+                self.vpn_menu(ev)
+            return True
         return self.dev_action(ev, key)
+
+    def more_menu(self, ev, hidden):
+        """The servers and services that did not fit in the bar: one entry each (left click opens a dev server)."""
+        items = []
+        for srv in hidden:
+            url = f"http://localhost:{srv['port']}"
+            head = f":{srv['port']}   {srv['label']}"
+            if srv["kind"] == "server":
+                items.append((head + "   \u2197", lambda u=url: run(["xdg-open", u])))
+            else:
+                items.append((head + "   (copy address)", lambda u=f"localhost:{srv['port']}": copy_text(u)))
+        popup_menu(ev, items)
 
     def dev_action(self, ev, key):
         """Click / right-click on a dev server or container (used by the bar and the Running card)."""
@@ -4887,6 +5340,11 @@ class WorkBar(Gtk.DrawingArea):
         else:
             cr.set_line_width(1.5)
             cr.stroke()
+
+    def _chip_width(self, cr, head, tail):
+        hw = self._measure(cr, head, 12.5, mono=True)
+        tw = min(190, self._measure(cr, tail, 12)) if tail else 0
+        return 26 + hw + (tw + 8 if tail else 0) + 12
 
     def _chip(self, cr, x, key, dot, filled, head, tail, right_limit):
         """Status dot, mono `head` (port / name), dim `tail`. Returns its width, or 0 if it does not fit."""
@@ -5031,6 +5489,53 @@ class WorkBar(Gtk.DrawingArea):
                 x += w + 8
         return x
 
+    def vpn_parts(self):
+        """(dot colour, filled, text, detail) of the VPN chip, or None when it is off or WARP is not installed."""
+        w = WARP[0]
+        if not w or not (CFG.get("vpn") or {}).get("chip", True) or not w.now:
+            return None
+        st = w.now["state"]
+        if st == WP.MISSING:
+            return None
+        if w.busy:
+            return C["amber"], True, "WARP", "connecting\u2026" if w.busy == "connecting" else "disconnecting\u2026"
+        if st == WP.CONNECTED:
+            lat = w.now.get("latency")
+            return C["mint"], True, "WARP", f"{lat:.0f} ms" if lat else "on"
+        if st == WP.CONNECTING:
+            return C["amber"], True, "WARP", "connecting\u2026"
+        return C["dim"], False, "WARP", "off" if st == WP.DISCONNECTED else "no service"
+
+    def vpn_width(self, cr):
+        v = self.vpn_parts()
+        return 0 if not v else 26 + self._measure(cr, v[2], 12.5, mono=True) + 8 + self._measure(cr, v[3], 12) + 12 + 8
+
+    def draw_vpn(self, cr, x):
+        """The Cloudflare WARP chip: click to switch it on or off, right click for more. Returns what it used."""
+        v = self.vpn_parts()
+        if not v:
+            return 0
+        col, filled, head, detail = v
+        hw = self._measure(cr, head, 12.5, mono=True)
+        w = 26 + hw + 8 + self._measure(cr, detail, 12) + 12
+        self._box(cr, x, w, ("vpn", None))
+        self._dot(cr, x + 14, col, filled)
+        text(cr, head, x + 26, 30, 12.5, C["acc"], mono=True)
+        text(cr, detail, x + 26 + hw + 8, 30, 12, C["dim"] if col != C["mint"] else C["text"])
+        return w + 8
+
+    def vpn_menu(self, ev):
+        w = WARP[0]
+        st = (w.now or {}).get("state") if w else None
+        on = st in (WP.CONNECTED, WP.CONNECTING)
+        items = [("Turn off WARP" if on else "Turn on WARP", lambda: w.toggle())]
+        if w and w.now and w.now.get("state") == WP.CONNECTED:
+            d = w.now
+            items += [(None, None), (f"{WP.MODE_NAMES.get(d.get('mode'), d.get('mode') or 'WARP')}"
+                                     f" \u00b7 {d.get('protocol', '')}".rstrip(" \u00b7"), lambda: None)]
+        items += [(None, None), ("Show details in a terminal tab", lambda: self._in_tab(None, "warp-cli status; warp-cli tunnel stats"))]
+        popup_menu(ev, items)
+
     def on_draw(self, _w, cr):
         cr.set_operator(cairo.OPERATOR_CLEAR)
         cr.paint()
@@ -5052,7 +5557,7 @@ class WorkBar(Gtk.DrawingArea):
             run_w += 120
         if cont:
             run_w += 80 + sum(26 + self._measure(cr, c["name"], 12.5, mono=True) + 20 for c in cont[:3])
-        run_w = min(run_w + 130, W * 0.55)
+        run_w = min(run_w + 130 + self.vpn_width(cr), W * 0.55)
         split = W - run_w
 
         self.draw_project(cr, 14, split - 20)
@@ -5064,20 +5569,30 @@ class WorkBar(Gtk.DrawingArea):
         if self.servers is None:
             text(cr, "looking…", x, 31, 12.5, C["dim"])
             return False
+        x += self.draw_vpn(cr, x)
         limit = W - 14 - (0 if not cont else 80 + sum(26 + self._measure(cr, c["name"], 12.5, mono=True) + 20
                                                     for c in cont[:3]))
         if not any(s["kind"] == "server" for s in servers):
             x += text(cr, "no dev servers", x, 31, 12.5, C["dim"]) + 14
-        hidden = 0
-        for srv in servers:
+        # as many chips as fit; the rest go behind a "+N" chip that opens a list of them
+        widths = [self._chip_width(cr, f":{s['port']}", s["label"]) for s in servers]
+        fits = lambda room: sum(1 for i in range(len(servers)) if x + sum(widths[:i + 1]) + 8 * (i + 1) <= room)  # noqa: E731
+        shown = len(servers) if fits(limit) == len(servers) else fits(limit - 74)
+        for srv in servers[:shown]:
             col = C["mint"] if srv["kind"] == "server" else C["dim"]
-            w = self._chip(cr, x, ("srv", srv), col, True, f":{srv['port']}", srv["label"], limit)
-            if not w:
-                hidden += 1
-                continue
+            x += self._chip(cr, x, ("srv", srv), col, True, f":{srv['port']}", srv["label"], limit) + 8
+        rest = servers[shown:]
+        if rest:
+            ids = tuple((s["port"], s["label"]) for s in rest)
+            if getattr(self, "_more_ids", None) != ids:
+                self._more_ids, self._more_key = ids, ("more", list(rest))
+            else:
+                self._more_key = ("more", self._more_key[1])
+            label = f"+{len(rest)} more \u25be"
+            w = self._measure(cr, label, 12) + 26
+            self._box(cr, x, w, self._more_key)
+            text(cr, label, x + 13, 30, 12, C["text"])
             x += w + 8
-        if hidden:
-            x += text(cr, f"+{hidden}", x + 4, 31, 12.5, C["dim"]) + 12
         if cont is not None:
             x = max(x + 6, limit)
             text(cr, "Docker", x, 31, 13, C["text"], bold=True)
@@ -5594,6 +6109,75 @@ class ServicesCard(DockCard):
             self.qbar.dev_action(ev, key)
 
 
+# --- VPN: Cloudflare WARP (switch it on and off, latency, traffic)
+class VpnCard(DockCard):
+    KEY, TITLE, ICON, PREF_W = "vpn", "VPN", "lock", 460
+    TICK = 1
+
+    def tile(self, cr, x, y, w, h, label, value, sub, hist=None, color=None, vmax=100.0):
+        rrect(cr, x, y, w, h, 12)
+        set_rgba(cr, C["ink"], 0.045)
+        cr.fill_preserve()
+        set_rgba(cr, C["border"], 0.5)
+        cr.set_line_width(1)
+        cr.stroke()
+        text(cr, label, x + 14, y + 22, 10.5, C["dim"], bold=True)
+        text(cr, value, x + 14, y + 52, 20, C["text"], bold=True, maxw=w - 28)
+        text(cr, sub, x + 14, y + 71, 11, C["dim"], maxw=w - 28)
+        if hist:
+            draw_spark(cr, x + w * 0.52, y + 10, w * 0.44 - 6, h - 34, hist, color or C["acc"], vmax)
+
+    def body(self, cr, w, h):
+        wp = WARP[0]
+        if not wp or not wp.now:
+            text(cr, "Cloudflare WARP is not installed" if not WP.available() else "looking\u2026", 24, 98, 13.5, C["dim"])
+            return
+        d, st = wp.now, wp.now["state"]
+        busy = wp.busy
+        col = C["amber"] if busy or st == WP.CONNECTING else C["mint"] if st == WP.CONNECTED else C["dim"]
+        cr.new_path()
+        cr.arc(34, 84, 6, 0, 2 * math.pi)
+        set_rgba(cr, col, 1)
+        cr.fill() if col != C["dim"] else (cr.set_line_width(1.6), cr.stroke())
+        title = ("Connecting\u2026" if busy == "connecting" else "Disconnecting\u2026" if busy else WP.LABEL[st])
+        text(cr, title, 50, 91, 20, C["text"], bold=True, maxw=w - 200)
+        sub = {WP.CONNECTED: "Cloudflare WARP \u00b7 your traffic is encrypted",
+               WP.DISCONNECTED: "Cloudflare WARP is switched off", WP.OFF: "Start it with: sudo systemctl start warp-svc",
+               WP.CONNECTING: "Setting up the tunnel\u2026"}.get(st, "")
+        text(cr, sub, 50, 111, 11.5, C["dim"], maxw=w - 70)
+        # switch button
+        on = st in (WP.CONNECTED, WP.CONNECTING)
+        label = "Turn off" if on else "Turn on"
+        bw, bx = 104, w - 20 - 104
+        if st != WP.OFF:
+            self.region(("toggle", None), bx, 64, bw, 36)
+            rrect(cr, bx, 64, bw, 36, 18)
+            set_rgba(cr, C["ink"] if on else C["acc"], 0.10 if on else 1)
+            cr.fill()
+            text(cr, label if not busy else "\u2026", bx + bw / 2, 87, 13, C["text"] if on else C["on_acc"], bold=True, align="c")
+        tw, th = (w - 40 - 10) / 2, 82
+        x0, x1, y0 = 20, 20 + (w - 40 - 10) / 2 + 10, 128
+        if st != WP.CONNECTED:
+            text(cr, "Nothing to show while it is off." if st != WP.OFF else "The WARP service is not running.",
+                 24, y0 + 30, 13, C["dim"])
+            return
+        lat = d.get("latency")
+        self.tile(cr, x0, y0, tw, th, "LATENCY", f"{lat:.0f} ms" if lat else "\u2014",
+                  "to the Cloudflare edge", wp.latency, C["acc"], max([100.0] + wp.latency))
+        loss = d.get("loss")
+        self.tile(cr, x1, y0, tw, th, "PACKET LOSS", f"{loss:.1f}%" if loss is not None else "\u2014",
+                  "estimated", None)
+        self.tile(cr, x0, y0 + th + 8, tw, th, "TRAFFIC", f"\u2193 {fmt_bytes(d.get('recv', 0))}",
+                  f"\u2191 {fmt_bytes(d.get('sent', 0))} sent", None)
+        mode = WP.MODE_NAMES.get(d.get("mode"), d.get("mode") or "WARP")
+        self.tile(cr, x1, y0 + th + 8, tw, th, "MODE", mode, " \u00b7 ".join(
+            x for x in (d.get("protocol"), d.get("account")) if x), None)
+
+    def activate(self, key, ev):
+        if key[0] == "toggle" and WARP[0]:
+            WARP[0].toggle()
+
+
 # --- Tests: status of the last run and the tail of its output
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -5695,6 +6279,7 @@ STATUS_TITLES = {"todo": "Not started", "doing": "Ongoing", "done": "Completed"}
 STATUS_COLOR = {"todo": "red", "doing": "amber", "done": "green"}
 PENDING = {}                              # record id -> (status just chosen, when): shown at once, confirmed by the next sync
 BOARD_NOTE = {"text": "", "until": 0.0}   # a short message under the board (an error, mostly)
+WARP = [None]                            # the Cloudflare WARP poller (set in main when warp-cli is installed)
 TASKS_MODE = [False]                      # is there a Tasks mode (a board is connected)?
 
 
@@ -5872,13 +6457,398 @@ def start_task(t, ev=None, repo=None, moved=False):
 
 def board_menu(ev, t, redraw):
     kind = status_kind(t.get("status"))
-    items = [("Open in Lark", lambda: open_url(t["url"])), (None, None)]
+    items = [("Show details", lambda: show_task(t, ev, redraw)), ("Open in Lark", lambda: open_url(t["url"])), (None, None)]
     if kind != "done":
         items += [("Start working on this", lambda: (start_task(t, ev), redraw())), (None, None)]
     items += [(f"Move to {STATUS_TITLES[k]}", lambda k=k: (move_task(t, k), redraw())) for k in ("todo", "doing", "done")
               if k != kind]
     items += [(None, None), ("Copy title", lambda: copy_text(t["title"])), ("Copy link", lambda: copy_text(t["url"]))]
     popup_menu(ev, items)
+
+
+_task_win = []
+
+
+def _plain_task(it):
+    """A task of another service (Today card rows) as the dict the popup shows."""
+    return dict(service=it.get("service", ""), id=it.get("guid") or it.get("id", ""), title=it.get("text") or it.get("title", ""),
+                due=it.get("due"), url=it.get("url", ""), detail=it.get("detail", ""), done=bool(it.get("done")))
+
+
+class TaskPopup(Gtk.Window):
+    """What a click on a task shows first: its details on the desktop, with the actions next to them, nothing opens
+    in the browser until you press "Open in Lark". It is a small window with a tab for every task you opened: drag
+    it anywhere by its empty parts, scroll a long description, close a tab with its x (Esc closes the tab)."""
+    W, MAXBODY, TABS_H, FOOT_PAD = 540, 600, 46, 18
+    MAX_TABS = 8
+    pos = None                                           # where you left it
+
+    def __init__(self):
+        super().__init__(type=Gtk.WindowType.TOPLEVEL)
+        self.set_title("Kiln Task")
+        self.get_style_context().add_class("kiln")
+        self.set_app_paintable(True)
+        vis = self.get_screen().get_rgba_visual()
+        if vis:
+            self.set_visual(vis)
+        self.set_decorated(False)
+        self.set_resizable(False)
+        self.set_skip_taskbar_hint(True)
+        self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+        self.area = Gtk.DrawingArea()
+        self.area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.POINTER_MOTION_MASK |
+                             Gdk.EventMask.LEAVE_NOTIFY_MASK | Gdk.EventMask.SCROLL_MASK)
+        self.add(self.area)
+        self.tabs, self.cur, self.off = [], 0, 0          # tabs: [{"t": task, "complete": callable or None}]
+        self.hits, self.hover, self.H, self.body_h, self.content_h = [], None, 300, 0, 0
+        self.area.connect("draw", self.on_draw)
+        self.area.connect("button-press-event", self.on_press)
+        self.area.connect("motion-notify-event", self.on_motion)
+        self.area.connect("leave-notify-event", lambda *_: self.set_hover(None))
+        self.area.connect("scroll-event", self.on_scroll)
+        self.connect("key-press-event", self.on_key)
+        self.connect("configure-event", self.on_moved)
+        self.connect("draw", lambda _w, cr: (cr.set_operator(cairo.OPERATOR_CLEAR), cr.paint(),
+                                               cr.set_operator(cairo.OPERATOR_OVER), False)[-1])
+        self._timer = 0
+
+    @property
+    def t(self):
+        return self.tabs[self.cur]["t"] if self.tabs else {}
+
+    # ---- what it shows
+    def facts(self, t):
+        """[(label, value, colour)] of the details a task has."""
+        out = []
+        if t.get("project"):
+            out.append(("Project", t["project"], C["text"]))
+        if t.get("service") == "larkbase" and t.get("detail"):
+            out.append(("Department", t["detail"], C["text"]))
+        if t.get("owners"):
+            out.append(("Assigned to", ", ".join(t["owners"]), C["text"]))
+        if t.get("start"):
+            out.append(("Start", time.strftime("%a %-d %b %Y", time.localtime(t["start"])), C["text"]))
+        if t.get("due"):
+            days = (datetime.date.fromtimestamp(t["due"]) - datetime.date.today()).days
+            rel = ("Today" if days == 0 else "Tomorrow" if days == 1 else f"in {days} days" if days > 1
+                   else "yesterday" if days == -1 else f"{-days} days ago")
+            late = days < 0 and not t.get("done") and status_kind(t.get("status")) != "done"
+            out.append(("Deadline", time.strftime("%a %-d %b %Y", time.localtime(t["due"])) + "  \u00b7  " + rel,
+                        C["red"] if late else C["amber"] if days == 0 and not late else C["text"]))
+        spent = TL.totals().get(t.get("id"), 0)
+        if spent >= 60:
+            out.append(("Time spent", TL.fmt(spent), C["text"]))
+        if t.get("attachments"):
+            n = len(t["attachments"])
+            out.append(("Attachments", f"{n} file{'s' if n != 1 else ''}: " + ", ".join(t["attachments"][:3]) +
+                        (" \u2026" if n > 3 else ""), C["text"]))
+        return out
+
+    def actions(self, t):
+        """[(key, label, primary)] for the buttons."""
+        board = t.get("service") == "larkbase" and t.get("status") is not None
+        name = ACC.SERVICES[t["service"]].name if t.get("service") in ACC.SERVICES else "the web"
+        acts = []
+        if board:
+            kind = status_kind(t.get("status"))
+            running = TL.active() and TL.active().get("id") == t["id"]
+            if kind != "done":
+                acts.append(("stop" if running else "start", "Stop timer" if running else "Start working", True))
+                acts.append(("move:done", "Mark completed", False))
+            if kind == "todo":
+                acts.append(("move:doing", "Move to Ongoing", False))
+            elif kind == "doing":
+                acts.append(("move:todo", "Back to Not started", False))
+            elif kind == "done":
+                acts.append(("move:doing", "Reopen", True))
+        elif t.get("service") in ACC.SERVICES and ACC.SERVICES[t["service"]].can_complete and not t.get("done"):
+            acts.append(("complete", "Mark completed", True))
+        if t.get("url"):
+            acts.append(("open", f"Open in {name} \u2197", False))
+            acts.append(("copy", "Copy link", False))
+        if t.get("desc"):
+            acts.append(("copydesc", "Copy description", False))
+        if not t.get("url"):
+            acts.append(("copytitle", "Copy title", False))
+        return acts
+
+    # ---- showing it
+    def show(self, t, ev=None, redraw=None, complete=None):
+        """Add the task as a tab (or switch to it when it is already open) and bring the window forward."""
+        entry = dict(t=dict(t), redraw=redraw, complete=complete)
+        i = next((i for i, e in enumerate(self.tabs) if e["t"].get("id") == t.get("id") and e["t"].get("service") == t.get("service")), None)
+        if not self.get_visible():
+            self.tabs = []
+            i = None
+        if i is None:
+            self.tabs.append(entry)
+            self.tabs = self.tabs[-self.MAX_TABS:]
+            i = len(self.tabs) - 1
+        else:
+            self.tabs[i] = entry
+        self.cur, self.off, self.hover = i, 0, None
+        self.fit()
+        if not self.get_visible():
+            display = Gdk.Display.get_default()
+            if TaskPopup.pos:
+                self.move(*TaskPopup.pos)
+            else:
+                px, py = (int(ev.x_root), int(ev.y_root)) if ev is not None and hasattr(ev, "x_root") else \
+                    display.get_default_seat().get_pointer().get_position()[1:]
+                mon = display.get_monitor_at_point(px, py).get_geometry()
+                self.move(mon.x + (mon.width - self.W) // 2, max(mon.y + 40, mon.y + (mon.height - self.H) // 3))
+            self.show_all()
+            self._timer = GLib.timeout_add(1500, self.refresh)
+        self.present()
+        self.area.queue_draw()
+
+    def fit(self):
+        """Measure the tab, size the window (a long task scrolls inside, the tabs and the buttons stay)."""
+        tmp = cairo.Context(cairo.ImageSurface(cairo.FORMAT_ARGB32, self.W, 10))
+        self.paint(tmp)
+        self.H = self.TABS_H + self.body_h + self.foot_h
+        self.area.set_size_request(self.W, self.H)
+        self.resize(self.W, self.H)
+
+    def refresh(self):
+        """Keep the tabs in step with the board (a status you just changed, a sync that brought new details)."""
+        if not self.get_visible():
+            self._timer = 0
+            return False
+        try:
+            fresh = {x["id"]: x for x in board_state()[1]}
+        except Exception:                          # noqa: BLE001  (a refresh must never break the window)
+            fresh = {}
+        changed = False
+        for e in self.tabs:
+            f = fresh.get(e["t"].get("id")) if e["t"].get("service") == "larkbase" else None
+            if f and f != e["t"]:
+                e["t"], changed = dict(f), True
+        if changed:
+            self.fit()
+        self.area.queue_draw()
+        return True
+
+    def close_tab(self, i):
+        if 0 <= i < len(self.tabs):
+            del self.tabs[i]
+        if not self.tabs:
+            self.hide()
+            return
+        self.cur, self.off = min(self.cur, len(self.tabs) - 1), 0
+        self.fit()
+        self.area.queue_draw()
+
+    def on_moved(self, _w, ev):
+        if self.get_visible():
+            TaskPopup.pos = (ev.x, ev.y)
+        return False
+
+    def set_hover(self, key):
+        if key != self.hover:
+            self.hover = key
+            self.area.queue_draw()
+
+    def _hit(self, x, y):
+        body = self.TABS_H <= y < self.TABS_H + self.body_h
+        return next((k for (hx, hy, w, h), k in reversed(self.hits) if hx <= x < hx + w and hy <= y < hy + h
+                     and (body or k[0] != "link")), None)
+
+    def on_motion(self, _w, ev):
+        self.set_hover(self._hit(ev.x, ev.y))
+
+    def on_scroll(self, _w, ev):
+        room = max(0, self.content_h - self.body_h)
+        step = 50 if ev.direction == Gdk.ScrollDirection.DOWN else -50 if ev.direction == Gdk.ScrollDirection.UP else 0
+        if ev.direction == Gdk.ScrollDirection.SMOOTH:
+            step = 50 * ev.delta_y
+        self.off = int(min(room, max(0, self.off + step)))
+        self.area.queue_draw()
+        return True
+
+    def on_key(self, _w, ev):
+        if ev.keyval == Gdk.KEY_Escape:
+            self.close_tab(self.cur)
+            return True
+        if ev.keyval in (Gdk.KEY_Page_Down, Gdk.KEY_Page_Up, Gdk.KEY_Down, Gdk.KEY_Up):
+            self.off = int(min(max(0, self.content_h - self.body_h), max(0, self.off + (
+                60 if ev.keyval in (Gdk.KEY_Page_Down, Gdk.KEY_Down) else -60))))
+            self.area.queue_draw()
+            return True
+        if ev.state & Gdk.ModifierType.CONTROL_MASK and ev.keyval == Gdk.KEY_Tab and self.tabs:
+            self.cur, self.off = (self.cur + 1) % len(self.tabs), 0
+            self.fit()
+            self.area.queue_draw()
+            return True
+        return False
+
+    def on_press(self, _w, ev):
+        if ev.button != 1:
+            return True
+        key = self._hit(ev.x, ev.y)
+        if key is None:                                   # an empty part of the window: move the whole window
+            self.begin_move_drag(ev.button, int(ev.x_root), int(ev.y_root), ev.time)
+            return True
+        e = self.tabs[self.cur]
+        t, redraw = e["t"], e["redraw"] or (lambda: None)
+        if key == ("close",):
+            self.hide()
+        elif key[0] == "tab":
+            self.cur, self.off = key[1], 0
+            self.fit()
+        elif key[0] == "tabx":
+            self.close_tab(key[1])
+        elif key[0] == "link":
+            url = t["links"][key[1]][1]
+            if url:
+                open_url(url)
+        elif key == ("open",):
+            open_url(t["url"])
+        elif key == ("copy",):
+            copy_text(t["url"])
+        elif key == ("copytitle",):
+            copy_text(t["title"])
+        elif key == ("copydesc",):
+            copy_text(t.get("desc", ""))
+        elif key == ("start",):
+            start_task(t, ev)
+            redraw()
+        elif key == ("stop",):
+            TL.stop(task_id=t["id"])
+            redraw()
+        elif key[0] == "move":
+            move_task(t, key[1])
+            t["status"], t["done"] = STATUS_NAMES[key[1]], key[1] == "done"      # shown at once; the sync confirms it
+            self.fit()
+            redraw()
+        elif key == ("complete",):
+            if e["complete"]:
+                e["complete"]()
+            t["done"] = True
+            self.fit()
+        self.area.queue_draw()
+        return True
+
+    # ---- drawing: tabs on top, the scrolling body, the buttons at the bottom
+    def paint(self, cr):
+        """Lay everything out (and paint it into `cr`); sets body_h, content_h and foot_h."""
+        self.hits = []
+        W, t, pad = self.W, self.t, 26
+        # tabs
+        x, room = 14, W - 14 - 48
+        n = max(1, len(self.tabs))
+        tw = min(170, max(80, (room - 6 * (n - 1)) / n))
+        for i, e in enumerate(self.tabs):
+            on = i == self.cur
+            hot = self.hover in (("tab", i), ("tabx", i))
+            rrect(cr, x, 10, tw, 30, 9)
+            set_rgba(cr, C["acc"] if on else C["ink"], 0.18 if on else 0.10 if hot else 0.04)
+            cr.fill()
+            text(cr, e["t"].get("title", ""), x + 10, 30, 12, C["text"] if on else C["dim"], maxw=tw - 34, ltr=True)
+            text(cr, "\u2715", x + tw - 9, 30, 11, C["text"] if self.hover == ("tabx", i) else C["dim"], align="r")
+            self.hits.append(((x, 10, tw - 24, 30), ("tab", i)))
+            self.hits.append(((x + tw - 24, 10, 24, 30), ("tabx", i)))
+            x += tw + 6
+        text(cr, "\u2715", W - 22, 30, 15, C["text"] if self.hover == ("close",) else C["dim"], align="r")
+        self.hits.append(((W - 44, 6, 36, 36), ("close",)))
+        hline(cr, 14, W - 14, self.TABS_H - 2)
+        # body
+        cr.save()
+        cr.rectangle(0, self.TABS_H, W, self.MAXBODY)
+        cr.clip()
+        cr.translate(0, self.TABS_H - self.off)
+        y = 14
+        kind = status_kind(t.get("status")) if t.get("status") is not None else ("done" if t.get("done") else "todo")
+        x = pad
+        if t.get("status") is not None:
+            x += pill(cr, x, y + 12, STATUS_TITLES[kind], 12, C[STATUS_COLOR[kind]], bold=True) + 8
+        elif t.get("service") in ACC.SERVICES:
+            x += pill(cr, x, y + 12, ACC.SERVICES[t["service"]].name, 12, C["acc"], bold=True) + 8
+        if (t.get("priority") or "").strip():
+            pill(cr, x, y + 12, t["priority"].strip(), 12, C["red"] if t["priority"].strip().lower() == "important" else C["dim"])
+        y += 40
+        y += text_wrap(cr, t.get("title", ""), pad, y, W - 2 * pad, 19, C["text"], lines=4, auto=True) + 12
+        facts = self.facts(t)
+        if facts:
+            hline(cr, pad, W - pad, y)
+            y += 12
+            for label, value, col in facts:
+                text(cr, label, pad, y + 14, 12, C["dim"])
+                h = text_wrap(cr, value, 130, y + 14, W - 130 - pad, 13, col, lines=2)
+                y += max(26, h + 12)
+        for head, body in (("DESCRIPTION", t.get("desc") or ""),
+                           ("PROGRESS NOTES", t.get("note") or (t.get("detail") if t.get("service") != "larkbase" else ""))):
+            if (body or "").strip():
+                hline(cr, pad, W - pad, y + 4)
+                y += 24
+                text(cr, head, pad, y + 6, 10.5, C["dim"], bold=True)
+                y += 20
+                y += text_wrap(cr, body.strip(), pad, y + 10, W - 2 * pad, 13, C["text"], lines=80, alpha=0.92, auto=True) + 12
+        links = t.get("links") or []
+        if links:
+            hline(cr, pad, W - pad, y + 4)
+            y += 24
+            text(cr, "LINKS", pad, y + 6, 10.5, C["dim"], bold=True)
+            y += 20
+            for i, (label, url) in enumerate(links):
+                hot = self.hover == ("link", i) and url
+                text(cr, label + ("  \u2197" if url else "  (not a link)"), pad, y + 12, 13,
+                     C["acc"] if hot or url else C["dim"], maxw=W - 2 * pad, ltr=True)
+                if url:
+                    self.hits.append(((pad, self.TABS_H - self.off + y - 4, W - 2 * pad, 24), ("link", i)))
+                y += 26
+        y += 10
+        cr.restore()
+        self.content_h = y
+        self.body_h = min(y, self.MAXBODY)
+        self.off = min(self.off, max(0, y - self.body_h))
+        # a hint that there is more
+        top = self.TABS_H + self.body_h
+        if y > self.body_h and self.off < y - self.body_h:
+            text(cr, "\u25be scroll", W - pad, top - 6, 10.5, C["dim"], align="r")
+        # buttons
+        yy = top + 8
+        hline(cr, pad, W - pad, yy)
+        yy += 14
+        bx, row_h = pad, 36
+        for key, label, primary in self.actions(t):
+            probe = PangoCairo.create_layout(cr)
+            fd = Pango.FontDescription()
+            fd.set_family(FONT)
+            fd.set_absolute_size(13 * Pango.SCALE)
+            probe.set_font_description(fd)
+            probe.set_text(label, -1)
+            bw = probe.get_pixel_size()[0] + 30
+            if bx + bw > W - pad + 1:
+                bx, yy = pad, yy + row_h + 8
+            hk = tuple(key.split(":"))
+            hot = self.hover == hk
+            self.hits.append(((bx, yy, bw, row_h), hk))
+            rrect(cr, bx, yy, bw, row_h, 11)
+            if primary:
+                set_rgba(cr, C["acc"], 0.95 if hot else 0.85)
+            else:
+                set_rgba(cr, C["ink"], 0.12 if hot else 0.06)
+            cr.fill_preserve()
+            set_rgba(cr, C["acc"] if primary else C["border"], 0.0 if primary else 0.9)
+            cr.set_line_width(1)
+            cr.stroke()
+            text(cr, label, bx + bw / 2, yy + 23, 13, C["on_acc"] if primary else (C["acc"] if hot else C["text"]),
+                 bold=primary, align="c")
+            bx += bw + 8
+        self.foot_h = int(yy + row_h + self.FOOT_PAD - top)
+
+    def on_draw(self, _w, cr):
+        card_bg(cr, 0, 0, self.W, self.H, 22, alpha=0.98)
+        self.paint(cr)
+        return False
+
+
+def show_task(t, ev=None, redraw=None, complete=None):
+    """Show a task's details (a window of its own, one tab per task). `t` is a Lark Base board task or a plain task dict."""
+    if not _task_win:
+        _task_win.append(TaskPopup())
+    _task_win[0].show(t, ev, redraw, complete)
 
 
 def new_task_window(tab=None):
@@ -5893,11 +6863,12 @@ def request_mode(name):
         pass
 
 
-def text_wrap(cr, s, x, y, w, size, color, lines=2, strike=False, alpha=1.0):
+def text_wrap(cr, s, x, y, w, size, color, lines=2, strike=False, alpha=1.0, auto=False):
     """Up to `lines` lines of wrapped text, first baseline at y. Returns the height used."""
     lay = PangoCairo.create_layout(cr)
-    lay.set_auto_dir(False)                            # Arabic titles start at the left like the rest of the card
-    lay.get_context().set_base_dir(Pango.Direction.LTR)
+    if not auto:                                       # cards: Arabic titles start at the left like the rest of the card
+        lay.set_auto_dir(False)
+        lay.get_context().set_base_dir(Pango.Direction.LTR)
     fd = Pango.FontDescription()
     fd.set_family(FONT)
     fd.set_absolute_size(size * Pango.SCALE)
@@ -6144,8 +7115,8 @@ class BoardCard(BoardBase):
                 move_task(t, {"todo": "doing", "doing": "done", "done": "doing"}[self.kind])
             elif ev.button == 3:
                 board_menu(ev, t, self.queue_draw)
-            elif t.get("url"):
-                open_url(t["url"])
+            else:
+                show_task(t, ev, self.queue_draw)
         self.queue_draw()
 
 
@@ -6413,8 +7384,8 @@ class BoardView(BoardBase):
                     move_task(t, {"todo": "doing", "doing": "done", "done": "doing"}[kind])
                 elif ev.button == 3:
                     board_menu(ev, t, self.queue_draw)
-                elif t.get("url"):
-                    open_url(t["url"])
+                else:
+                    show_task(t, ev, self.queue_draw)
         self.queue_draw()
 
 
@@ -6641,9 +7612,9 @@ class NotesCard(Gtk.Box):
 
 
 # --- where the cards go: row 1 runs to the right edge, row 2 stops at the Focus card
-DOCK_ORDER = ["git", "board", "system", "notes", "tests", "day", "services"]
-DOCK_MIN = {"git": 460, "board": 400, "system": 420, "services": 380, "day": 560, "notes": 320, "tests": 380}
-DOCK_PREF = {"git": 620, "board": 520, "system": 520, "services": 520, "day": 640, "notes": 430, "tests": 500}
+DOCK_ORDER = ["git", "board", "system", "notes", "tests", "day", "services", "vpn"]
+DOCK_MIN = {"git": 460, "board": 400, "system": 420, "services": 380, "day": 560, "notes": 320, "tests": 380, "vpn": 380}
+DOCK_PREF = {"git": 620, "board": 520, "system": 520, "services": 520, "day": 640, "notes": 430, "tests": 500, "vpn": 440}
 DOCK_ACTIVE = set()              # the cards actually placed on this screen (the clock card looks at it)
 
 
@@ -6975,19 +7946,22 @@ def main():
     music = NowPlaying()
     w5 = make_window("Kiln Music", music, g.x + L["music"][0], g.y + L["music"][1], NowPlaying.W, NowPlaying.H)
     qbar = WorkBar(term)
+    if WP.available() and ((CFG.get("vpn") or {}).get("chip", True) or "vpn" in ((CFG.get("dock") or {}).get("cards") or [])):
+        WARP[0] = WP.Warp(on_change=lambda: GLib.idle_add(lambda: (qbar.queue_draw(), False)[1])).start()
     w6 = make_window("Kiln Workbar", qbar, g.x + L["bar"][0], g.y + L["bar"][1], WorkBar.W, WorkBar.H)
 
     # dock cards: whatever fits in the free space of a big screen (nothing on a small one)
     cards_cfg = (CFG.get("dock") or {}).get("cards") or []
-    wanted = [k for k in DOCK_ORDER if k in cards_cfg and (k != "board" or "larkbase" in ACC.connected())]
+    wanted = [k for k in DOCK_ORDER if k in cards_cfg and (k != "board" or "larkbase" in ACC.connected())
+              and (k != "vpn" or WARP[0])]
     if "board" not in wanted:                    # without a board the cards keep their older order
-        wanted = [k for k in ("git", "system", "day", "notes", "tests", "services") if k in wanted]
+        wanted = [k for k in ("git", "system", "day", "notes", "tests", "services", "vpn") if k in wanted]
     specs = {k: (DOCK_MIN[k], DOCK_PREF[k]) for k in DOCK_ORDER}
     specs["day"] = DayCard.specs()
     makers = {"git": lambda: GitCard(term), "system": lambda: SystemCard(term),
               "services": lambda: ServicesCard(term, qbar), "day": lambda: DayCard(term),
               "notes": lambda: NotesCard(term), "tests": lambda: TestsCard(term, qbar),
-              "board": lambda: BoardCard(term)}
+              "board": lambda: BoardCard(term), "vpn": lambda: VpnCard(term)}
     dock, dock_geo, dock_card = {}, {}, {}
     for key, dx, dy, dw in plan_dock(L, wanted, specs):
         card = makers[key]()
