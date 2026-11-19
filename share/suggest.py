@@ -17,7 +17,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -483,6 +482,14 @@ def backend(cfg):
     return None
 
 
+def private_dir():
+    """An empty folder only you can use, where the AI is started (never /tmp: someone else could plant settings there)."""
+    d = os.path.join(os.environ.get("KILN_CACHE", f"{HOME}/.cache/kiln"), "ai-empty")
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    os.chmod(d, 0o700)
+    return d
+
+
 def ask_ai(typed, folder, history, cfg, timeout=40):
     """Blocking (run it in a thread): a command, or None. Never raises."""
     be = backend(cfg)
@@ -498,8 +505,8 @@ def ask_ai(typed, folder, history, cfg, timeout=40):
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return clean_reply(json.load(r).get("response", ""), typed)
         r = subprocess.run(["claude", "-p", "--model", "haiku", "--no-session-persistence", "--output-format", "text",
-                            "--tools", "", prompt],                    # no tools: it can only answer in text
-                           capture_output=True, text=True, timeout=timeout, cwd=tempfile.gettempdir())
+                            "--tools", "", "--setting-sources", "user", "--strict-mcp-config", prompt],
+                           capture_output=True, text=True, timeout=timeout, cwd=private_dir())   # text only, no tools
         return clean_reply(r.stdout, typed)
     except (OSError, ValueError, subprocess.SubprocessError, urllib.error.URLError):
         return None

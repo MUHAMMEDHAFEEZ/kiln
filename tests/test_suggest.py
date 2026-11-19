@@ -345,3 +345,26 @@ class HostileProjectTests(unittest.TestCase):
             self.assertIsNone(S.clean_reply(bad, "# do it"), bad)
         self.assertEqual(S.clean_reply("rm -rf build", "# clean"), "rm -rf build")
         self.assertEqual(S.clean_reply("find . -name '*.log'", "# find logs"), "find . -name '*.log'")
+
+
+class AiRunTests(unittest.TestCase):
+    def test_claude_starts_in_a_private_empty_folder_without_tools(self):
+        calls = []
+        saved = (S.subprocess.run, S.backend)
+        S.subprocess.run = lambda cmd, **kw: (calls.append((cmd, kw)), type("R", (), {"stdout": "ls -la\n"})())[1]
+        S.backend = lambda cfg: ("claude", "")
+        hist = S.History.__new__(S.History)
+        hist.recent_in = lambda folder: []
+        try:
+            with tempfile.TemporaryDirectory() as t:
+                os.environ["KILN_CACHE"] = t
+                self.assertEqual(S.ask_ai("# list files", t, hist, {}), "ls -la")
+                cmd, kw = calls[0]
+                self.assertEqual(kw["cwd"], os.path.join(t, "ai-empty"))
+                self.assertEqual(stat.S_IMODE(os.stat(kw["cwd"]).st_mode), 0o700)
+                self.assertEqual(cmd[cmd.index("--tools") + 1], "")                      # no tools at all
+                self.assertEqual(cmd[cmd.index("--setting-sources") + 1], "user")        # no project settings or hooks
+                self.assertIn("--strict-mcp-config", cmd)
+        finally:
+            S.subprocess.run, S.backend = saved
+            os.environ.pop("KILN_CACHE", None)

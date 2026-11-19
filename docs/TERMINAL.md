@@ -26,7 +26,8 @@ Where a suggestion comes from, in this order:
    and the programs on your `PATH` (`doc` → `docker`), so a fresh machine with no history is not blank.
 4. **The AI**, only when you ask. Type `# find files bigger than 100 MB` and press Ctrl+Space: the grey text shows the command,
    **Tab** puts it on the line (replacing the request) and you press Enter when you are happy with it. Kiln never runs
-   what the AI wrote.
+   what the AI wrote. Its answers are filtered (nothing that pipes into a shell or wipes a disk) as a best effort, and Claude
+   runs with no tools, in an empty private folder; the real safeguard is that nothing runs until you press Enter.
 
 ### The AI and your privacy
 
