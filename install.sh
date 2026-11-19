@@ -90,7 +90,7 @@ say "Installing files"
 mkdir -p "$SHARE" "$BIN" "$(dirname "$EXT")"
 rsync -a --delete --exclude '__pycache__' "$R/share/" "$SHARE/"
 install -m 755 "$R/bin/kiln" "$BIN/kiln"
-rsync -a --delete "$R/shell-extension/$UUID/" "$EXT/"
+rsync -a --delete --exclude=stylesheet.css --exclude=logo.svg "$R/shell-extension/$UUID/" "$EXT/"
 for f in "$R"/config/*; do                       # starter files, never overwrite the user's own
   [ -e "$CONF/$(basename "$f")" ] || cp "$f" "$CONF/"
 done
